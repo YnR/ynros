@@ -23,7 +23,7 @@ export function buildArgs({ settings, model, sessionId, mcpConfig }) {
   if (mcpConfig) {
     args.push('--mcp-config', JSON.stringify(mcpConfig));
     // The harness tools only read data, create drafts, or add calendar events without emailing guests.
-    tools.push('mcp__harness');
+    if (mcpConfig.mcpServers?.harness) tools.push('mcp__harness');
   }
   if (tools.length) args.push('--allowedTools', ...tools);
   if (cfg.systemPrompt) args.push('--append-system-prompt', cfg.systemPrompt);

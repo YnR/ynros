@@ -3,6 +3,7 @@ import * as ics from './integrations/ics.js';
 import * as skills from './integrations/skills.js';
 import * as files from './files.js';
 import * as contacts from './integrations/contacts.js';
+import * as mcp from './mcp/registry.js';
 import fsp from 'node:fs/promises';
 import pathMod from 'node:path';
 
@@ -367,10 +368,20 @@ export async function availableTools(settings, { forClaudeCode = false, project 
     if (t.group === 'calendar') return hasGoogleCal || hasFeeds;
     return true;
   });
+  // MCP servers from the registry: API models call them through the harness;
+  // Claude Code receives them directly via --mcp-config.
+  if (!forClaudeCode) {
+    try { tools.push(...await mcp.apiTools()); } catch (e) { console.warn('MCP tools unavailable:', e.message); }
+  }
   return { tools, skills: skillList, googleStatus };
 }
 
 export async function runTool(name, args, settings, { project = null } = {}) {
+  if (name.startsWith('mcp__')) {
+    const t = (await mcp.apiTools()).find((x) => x.name === name);
+    if (!t) throw new Error(`Unknown MCP tool ${name}`);
+    return mcp.callTool(t.mcp.server, t.mcp.tool, args);
+  }
   const tool = TOOLS.find((t) => t.name === name);
   if (!tool) throw new Error(`Unknown tool ${name}`);
   if (tool.group === 'project' && !project) throw new Error('This chat is not in a project');

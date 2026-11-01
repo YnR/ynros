@@ -9,6 +9,7 @@ import { triage } from './triage.js';
 import * as files from './files.js';
 import * as projects from './projects.js';
 import * as quota from './quota.js';
+import * as mcp from './mcp/registry.js';
 import * as tools from './tools.js';
 import * as google from './integrations/google.js';
 import * as skillsLib from './integrations/skills.js';
@@ -435,6 +436,37 @@ async function route(req, res) {
     }
     if (parts.length === 3 && method === 'DELETE') {
       await projects.removeProject(parts[2]);
+      return sendJson(res, 200, { ok: true });
+    }
+  }
+
+  if (parts[1] === 'mcp') {
+    const settings = await loadSettings();
+    if (parts.length === 2 && method === 'GET') {
+      const reg = await mcp.loadRegistry();
+      return sendJson(res, 200, { servers: Object.entries(reg.servers).map(([name, c]) => ({ name, ...c, env: c.env ? Object.keys(c.env) : undefined, headers: c.headers ? Object.keys(c.headers) : undefined })) });
+    }
+    if (parts.length === 2 && method === 'POST') {
+      const body = await readJson(req);
+      return sendJson(res, 201, await mcp.addServer(String(body.name || ''), body.config || {}));
+    }
+    if (parts[2] === 'claude-marketplace') {
+      if (parts.length === 3 && method === 'GET') return sendJson(res, 200, await mcp.claudeMarketplace(settings));
+      if (parts[3] === 'install' && method === 'POST') return sendJson(res, 200, await mcp.claudeInstallPlugin(settings, (await readJson(req)).pluginId));
+      if (parts[3] === 'add' && method === 'POST') return sendJson(res, 200, { log: await mcp.claudeAddMarketplace(settings, (await readJson(req)).source) });
+    }
+    if (parts[2] === 'gemini-extension' && method === 'POST') {
+      return sendJson(res, 200, await mcp.importGeminiExtension(String((await readJson(req)).url || '')));
+    }
+    if (parts.length === 4 && parts[3] === 'tools' && method === 'GET') {
+      return sendJson(res, 200, await mcp.serverTools(parts[2], { refresh: true }));
+    }
+    if (parts.length === 4 && parts[3] === 'enabled' && method === 'POST') {
+      await mcp.setEnabled(parts[2], (await readJson(req)).enabled);
+      return sendJson(res, 200, { ok: true });
+    }
+    if (parts.length === 3 && method === 'DELETE') {
+      await mcp.removeServer(parts[2]);
       return sendJson(res, 200, { ok: true });
     }
   }

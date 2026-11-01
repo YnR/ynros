@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import * as store from './store.js';
 import { availableTools, runTool, toolSystemNote } from './tools.js';
 import { getProject, readInstructions } from './projects.js';
+import { claudeCodeServers } from './mcp/registry.js';
 import { local } from './local.js';
 import * as quota from './quota.js';
 
@@ -17,13 +18,11 @@ async function runOptions(settings, providerName, conv) {
   if (project) out.cwd = project.path; // Claude Code reads CLAUDE.md from its working folder itself
   const { tools, skills } = await availableTools(settings, { forClaudeCode: isCC, project });
   if (isCC) {
+    const servers = await claudeCodeServers().catch(() => ({}));
     if (tools.length && local.url) {
-      out.mcpConfig = {
-        mcpServers: {
-          harness: { command: process.execPath, args: [MCP_SERVER], env: { HARNESS_URL: local.url, HARNESS_TOKEN: local.token } },
-        },
-      };
+      servers.harness = { command: process.execPath, args: [MCP_SERVER], env: { HARNESS_URL: local.url, HARNESS_TOKEN: local.token } };
     }
+    if (Object.keys(servers).length) out.mcpConfig = { mcpServers: servers };
     return out;
   }
   out.tools = tools;

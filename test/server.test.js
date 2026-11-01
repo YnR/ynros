@@ -293,3 +293,25 @@ test('quota: a usage limit parks the work, queues a continue, and offers other p
   (await import('../server/quota.js'))._reset();
   await fetch(`${base}/api/settings`, json('PUT', { gemini: { clearApiKey: true } }));
 });
+
+test('mcp: add a stdio server; API models see its tools and can call them', async () => {
+  const echo = path.join(path.dirname(FAKE_CLAUDE), 'echo-mcp.mjs');
+  let res = await fetch(`${base}/api/mcp`, json('POST', { name: 'echo', config: { command: process.execPath, args: [echo] } }));
+  assert.equal(res.status, 201);
+  const tools = await (await fetch(`${base}/api/mcp/echo/tools`)).json();
+  assert.deepEqual(tools.tools.map((t) => t.name), ['shout']);
+
+  const { availableTools, runTool } = await import('../server/tools.js');
+  const { loadSettings } = await import('../server/settings.js');
+  const settings = await loadSettings();
+  const api = await availableTools(settings);
+  assert.ok(api.tools.some((t) => t.name === 'mcp__echo__shout'));
+  assert.equal(await runTool('mcp__echo__shout', { text: 'hi' }, settings), 'HI');
+  const cc = await availableTools(settings, { forClaudeCode: true });
+  assert.ok(!cc.tools.some((t) => t.name.startsWith('mcp__')), 'Claude Code gets MCP servers directly');
+
+  res = await fetch(`${base}/api/mcp`, json('POST', { name: 'bad name!', config: { command: 'x' } }));
+  assert.equal(res.status, 400);
+  await fetch(`${base}/api/mcp/echo`, { method: 'DELETE' });
+  assert.equal((await (await fetch(`${base}/api/mcp`)).json()).servers.length, 0);
+});

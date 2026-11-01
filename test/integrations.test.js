@@ -188,3 +188,20 @@ test('quota: the reserve blocks automatic work but not new instructions', async 
   assert.deepEqual(quota.limitFromError('Claude AI usage limit reached|1793580000'), { status: 'rejected', resetsAt: 1793580000000 });
   assert.equal(quota.limitFromError('some other failure'), null);
 });
+
+test('mcp: imports servers from a Gemini extension manifest', async () => {
+  const mcp = await import('../server/mcp/registry.js');
+  const seen = [];
+  const fetchImpl = async (u) => {
+    seen.push(u);
+    if (u.includes('/HEAD/')) return Response.json({ name: 'weather', version: '1.0.0', mcpServers: { weather: { httpUrl: 'https://mcp.example.com/mcp' }, local: { command: 'node', args: ['${extensionPath}/server.js'] } } });
+    return new Response('nope', { status: 404 });
+  };
+  const r = await mcp.importGeminiExtension('https://github.com/acme/weather-ext', fetchImpl);
+  assert.equal(seen[0], 'https://raw.githubusercontent.com/acme/weather-ext/HEAD/gemini-extension.json');
+  assert.deepEqual(r.imported, ['weather']);
+  assert.equal(r.skipped[0].name, 'local');
+  const reg = await mcp.loadRegistry();
+  assert.equal(reg.servers.weather.url, 'https://mcp.example.com/mcp');
+  assert.equal(reg.servers.weather.source, 'gemini-extension:weather');
+});
