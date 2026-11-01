@@ -10,6 +10,7 @@ import * as files from './files.js';
 import * as projects from './projects.js';
 import * as quota from './quota.js';
 import * as mcp from './mcp/registry.js';
+import { route as routeModel, tiersFor } from './router.js';
 import * as tools from './tools.js';
 import * as google from './integrations/google.js';
 import * as skillsLib from './integrations/skills.js';
@@ -118,8 +119,32 @@ async function beginTurn(conv, text, { provider: providerName, model, batch } = 
   conv.messages.push(msg);
   await store.saveConversation(conv);
 
+  let prepare = null;
+  if (model === 'auto') {
+    const before = { ...conv, messages: conv.messages.slice(0, -1) };
+    prepare = async () => {
+      let r;
+      if (settings.routing?.enabled === false) {
+        r = { tier: conv.routedTier || 'medium', reason: 'Routing is off', related: null };
+      } else {
+        try {
+          r = await routeModel({ settings, providers, conv: before, provider: providerName, text });
+        } catch (e) {
+          r = { tier: conv.routedTier || 'medium', reason: `Router unavailable (${e.message})`, related: null };
+        }
+      }
+      r.model ||= tiersFor(settings, providerName)[r.tier];
+      conv.routedTier = r.tier;
+      if (r.related === false && settings.routing?.suggestNewChat !== false && before.messages.length >= 2) {
+        r.suggestNewChat = { reason: r.reason || 'This looks like a new topic.' };
+        conv.suggestNewChat = { messageTs: msg.ts, reason: r.suggestNewChat.reason };
+      }
+      return r;
+    };
+  }
+
   return runs.startRun({
-    conv, provider, providerName, model, settings,
+    conv, provider, providerName, model, settings, prepare,
     onFinish: (run) => drainQueue(conv, run),
   });
 }
@@ -177,7 +202,7 @@ async function drainQueue(conv, run, { force = false } = {}) {
     return;
   }
   // A manual Stop pauses the queue; the user can send it with "Send now".
-  if (run?.stopReason === 'user') {
+  if (run?.stopReason === 'user' || run?.stopReason === 'moved') {
     conv.queuePaused = true;
     await store.saveConversation(conv);
     queueEvent(conv);
@@ -565,6 +590,26 @@ async function route(req, res) {
       return handleChat(req, res, id);
     } else if (parts[3] === 'stream' && parts.length === 4 && method === 'GET') {
       return handleStream(req, res, id);
+    } else if (parts[3] === 'new-chat' && parts.length === 4 && method === 'POST') {
+      // "Start a fresh chat": move the latest message into a new chat in the same project.
+      await readJson(req);
+      const c = runs.getRun(id)?.conv || await store.getConversation(id);
+      if (!c) throw new HttpError(404, 'Not found');
+      if (runs.getRun(id)) { runs.stopRun(id, 'moved'); await runs.waitForIdle(id); }
+      const lastUser = c.messages.map((m) => m.role).lastIndexOf('user');
+      if (lastUser < 0) throw new HttpError(400, 'Nothing to move');
+      const moved = c.messages[lastUser];
+      c.messages = c.messages.slice(0, lastUser);
+      c.suggestNewChat = null;
+      await store.saveConversation(c);
+      const fresh = await store.createConversation({ provider: c.provider, model: c.model, projectId: c.projectId });
+      await beginTurn(fresh, moved.content, {});
+      return sendJson(res, 201, { id: fresh.id });
+    } else if (parts[3] === 'dismiss-suggestion' && parts.length === 4 && method === 'POST') {
+      await readJson(req);
+      const c = runs.getRun(id)?.conv || await store.getConversation(id);
+      if (c) { c.suggestNewChat = null; await store.saveConversation(c); }
+      return sendJson(res, 200, { ok: true });
     } else if (parts[3] === 'switch' && parts.length === 4 && method === 'POST') {
       // Move the chat to another provider (e.g. when one is out of quota) and send what is waiting.
       const body = await readJson(req);

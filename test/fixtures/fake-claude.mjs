@@ -15,6 +15,15 @@ process.stdin.on('end', async () => {
     out({ type: 'result', subtype: 'success', is_error: false, session_id: 'triage' });
     return;
   }
+  if (input.includes("You route a user's message")) {
+    const msg = input.split('New message:').pop();
+    const tier = /hard/.test(msg) ? 'large' : 'small';
+    const related = /unrelated/.test(msg) ? false : true;
+    const out = (o) => process.stdout.write(`${JSON.stringify(o)}\n`);
+    out({ type: 'assistant', message: { content: [{ type: 'text', text: JSON.stringify({ tier, related, reason: 'fake route' }) }] } });
+    out({ type: 'result', subtype: 'success', is_error: false, session_id: 'route' });
+    return;
+  }
   if (input.includes('slow')) await new Promise((r) => setTimeout(r, 600));
   if (input.includes('hit limit')) {
     const out = (o) => process.stdout.write(`${JSON.stringify(o)}\n`);
@@ -28,7 +37,8 @@ process.stdin.on('end', async () => {
   const resume = args.includes('--resume') ? args[args.indexOf('--resume') + 1] : null;
   const sid = resume || 'sess-123';
   const out = (o) => process.stdout.write(`${JSON.stringify(o)}\n`);
-  out({ type: 'system', subtype: 'init', session_id: sid, model: 'fake-model' });
+  const modelArg = args.includes('--model') ? args[args.indexOf('--model') + 1] : 'fake-model';
+  out({ type: 'system', subtype: 'init', session_id: sid, model: modelArg });
   const reply = `echo: ${input}${resume ? ` (resumed ${resume})` : ''}`;
   for (const chunk of [reply.slice(0, 5), reply.slice(5)]) {
     out({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: chunk } } });

@@ -315,3 +315,36 @@ test('mcp: add a stdio server; API models see its tools and can call them', asyn
   await fetch(`${base}/api/mcp/echo`, { method: 'DELETE' });
   assert.equal((await (await fetch(`${base}/api/mcp`)).json()).servers.length, 0);
 });
+
+test('auto model: routes per message, stays sticky, and suggests a fresh chat for a new topic', async () => {
+  await fetch(`${base}/api/settings`, json('PUT', { claudeCode: { binaryPath: FAKE_CLAUDE, workingDirectory: dataDir } }));
+  const conv = await (await fetch(`${base}/api/conversations`, json('POST', { provider: 'claudeCode', model: 'auto' }))).json();
+
+  let events = await sendAndStream(conv.id, 'quick question');
+  let routed = events.find((e) => e.type === 'routed');
+  assert.equal(routed.tier, 'small');
+  assert.equal(routed.model, 'haiku');
+
+  events = await sendAndStream(conv.id, 'now a hard refactor');
+  routed = events.find((e) => e.type === 'routed');
+  assert.equal(routed.model, 'opus', 'moves up a tier when needed');
+
+  events = await sendAndStream(conv.id, 'another quick one');
+  assert.equal(events.find((e) => e.type === 'routed').model, 'opus', 'does not drop back mid-chat (keeps the cache)');
+
+  events = await sendAndStream(conv.id, 'something unrelated: plan my vacation');
+  assert.ok(events.some((e) => e.type === 'suggest_new_chat'));
+  const c = await (await fetch(`${base}/api/conversations/${conv.id}`)).json();
+  assert.ok(c.suggestNewChat);
+  assert.equal(c.model, 'auto');
+
+  const moved = await (await fetch(`${base}/api/conversations/${conv.id}/new-chat`, json('POST', {}))).json();
+  const fresh = await waitFor(async () => {
+    const x = await (await fetch(`${base}/api/conversations/${moved.id}`)).json();
+    return !x.running && x.messages.length === 2 && x;
+  });
+  assert.match(fresh.messages[0].content, /plan my vacation/);
+  const old = await (await fetch(`${base}/api/conversations/${conv.id}`)).json();
+  assert.equal(old.messages.length, 6);
+  assert.equal(old.suggestNewChat, null);
+});

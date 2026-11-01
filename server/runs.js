@@ -78,7 +78,7 @@ function runSummary(run) {
 
 let runSeq = 0;
 
-export function startRun({ conv, provider, providerName, model, settings, onFinish }) {
+export function startRun({ conv, provider, providerName, model, settings, onFinish, prepare }) {
   if (runs.has(conv.id)) throw Object.assign(new Error('This chat is already running.'), { status: 409 });
 
   const run = {
@@ -108,6 +108,16 @@ export function startRun({ conv, provider, providerName, model, settings, onFini
 
   (async () => {
     try {
+      if (prepare) {
+        // Auto model: pick the model for this turn before starting.
+        emit({ type: 'status', text: 'Choosing a model…' });
+        const r = await prepare();
+        model = r.model;
+        assistant.model = model;
+        assistant.routed = { tier: r.tier, reason: r.reason, proposedTier: r.proposedTier };
+        emit({ type: 'routed', model, tier: r.tier, reason: r.reason });
+        if (r.suggestNewChat) emit({ type: 'suggest_new_chat', reason: r.suggestNewChat.reason });
+      }
       let extra = {};
       try { extra = await runOptions(settings, providerName, conv); } catch (e) { console.warn('tools unavailable:', e.message); }
       for await (const ev of provider.stream({

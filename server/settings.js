@@ -7,7 +7,7 @@ const SETTINGS_FILE = () => path.join(DATA_DIR, 'settings.json');
 
 export const PROVIDERS = ['anthropic', 'gemini', 'claudeCode'];
 // Every settings section the settings page may update.
-const SECTIONS = [...PROVIDERS, 'notifications', 'google', 'calendars', 'tools', 'triage', 'files', 'projects', 'contacts', 'quota'];
+const SECTIONS = [...PROVIDERS, 'notifications', 'google', 'calendars', 'tools', 'triage', 'files', 'projects', 'contacts', 'quota', 'routing'];
 // Values that are write-only: stored, but never sent back to the browser.
 const SECRETS = { anthropic: ['apiKey'], gemini: ['apiKey'], google: ['clientSecret'] };
 
@@ -61,6 +61,15 @@ export function defaultSettings() {
       // Where new projects are created. Empty = ~/Harness Projects.
       hostFolder: '',
       lastProjectId: '',
+    },
+    routing: {
+      // "Auto" model: a small model picks small / medium / large per message.
+      enabled: true,
+      suggestNewChat: true,
+      // Optional overrides of the model used for each tier.
+      anthropic: { small: '', medium: '', large: '' },
+      gemini: { small: '', medium: '', large: '' },
+      claudeCode: { small: '', medium: '', large: '' },
     },
     quota: {
       // Keep this share of each provider's window for new instructions:
@@ -183,6 +192,7 @@ export async function updateSettings(patch) {
       if (type === 'object' && v && typeof v === 'object') {
         for (const [kk, vv] of Object.entries(v)) {
           if (!(kk in defaults[section][k])) continue;
+          if (typeof defaults[section][k][kk] === 'string') { current[section][k][kk] = String(vv ?? ''); continue; }
           const n = Number(vv);
           if (Number.isFinite(n) && n >= 0) current[section][k][kk] = n;
         }

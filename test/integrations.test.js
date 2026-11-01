@@ -205,3 +205,13 @@ test('mcp: imports servers from a Gemini extension manifest', async () => {
   assert.equal(reg.servers.weather.url, 'https://mcp.example.com/mcp');
   assert.equal(reg.servers.weather.source, 'gemini-extension:weather');
 });
+
+test('router: sticky tier choice and tolerant parsing', async () => {
+  const { chooseTier, parseRoute } = await import('../server/router.js');
+  assert.equal(chooseTier(null, 'small', 0), 'small');
+  assert.equal(chooseTier('small', 'large', 10), 'large');
+  assert.equal(chooseTier('large', 'small', 10), 'large');
+  assert.equal(chooseTier('large', 'small', 2), 'small');
+  assert.deepEqual(parseRoute('sure {"tier":"large","related":false,"reason":"x"}'), { tier: 'large', related: false, reason: 'x' });
+  assert.equal(parseRoute('garbage').tier, 'medium');
+});
