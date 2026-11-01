@@ -1,5 +1,29 @@
 import { EventEmitter } from 'node:events';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as store from './store.js';
+import { availableTools, runTool, toolSystemNote } from './tools.js';
+import { local } from './local.js';
+
+const MCP_SERVER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-server.js');
+
+/** Tools for this run: function tools for API models, an MCP bridge for Claude Code. */
+async function toolOptions(settings, providerName) {
+  const isCC = providerName === 'claudeCode';
+  const { tools, skills } = await availableTools(settings, { forClaudeCode: isCC });
+  if (!tools.length) return {};
+  if (isCC) {
+    if (!local.url) return {};
+    return {
+      mcpConfig: {
+        mcpServers: {
+          harness: { command: process.execPath, args: [MCP_SERVER], env: { HARNESS_URL: local.url, HARNESS_TOKEN: local.token } },
+        },
+      },
+    };
+  }
+  return { tools, runTool: (name, args) => runTool(name, args, settings), systemNote: toolSystemNote(skills) };
+}
 
 /**
  * Runs execute on the server, independent of any browser tab. A tab can
@@ -83,8 +107,10 @@ export function startRun({ conv, provider, providerName, model, settings, onFini
 
   (async () => {
     try {
+      let extra = {};
+      try { extra = await toolOptions(settings, providerName); } catch (e) { console.warn('tools unavailable:', e.message); }
       for await (const ev of provider.stream({
-        settings, messages: conv.messages, model, signal: run.controller.signal, conversation: conv,
+        settings, messages: conv.messages, model, signal: run.controller.signal, conversation: conv, ...extra,
       })) {
         if (ev.type === 'text') assistant.content += ev.text;
         else if (ev.type === 'tool' || ev.type === 'tool_result') assistant.events.push(ev);

@@ -7,7 +7,7 @@ const SETTINGS_FILE = () => path.join(DATA_DIR, 'settings.json');
 
 export const PROVIDERS = ['anthropic', 'gemini', 'claudeCode'];
 // Every settings section the settings page may update.
-const SECTIONS = [...PROVIDERS, 'notifications', 'google', 'calendars', 'tools', 'triage'];
+const SECTIONS = [...PROVIDERS, 'notifications', 'google', 'calendars', 'tools', 'triage', 'files'];
 // Values that are write-only: stored, but never sent back to the browser.
 const SECRETS = { anthropic: ['apiKey'], gemini: ['apiKey'], google: ['clientSecret'] };
 
@@ -50,6 +50,10 @@ export function defaultSettings() {
     },
     tools: {
       enabled: true,
+    },
+    files: {
+      // Folder for the Markdown viewer/editor. Empty = Claude Code working directory.
+      root: '',
     },
     triage: {
       enabled: true,

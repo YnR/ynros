@@ -151,3 +151,4 @@ vite.config.ts.timestamp-*
 # Harness local data (if HARNESS_DATA_DIR points inside the repo)
 .harness-data/
 dist/
+public/vendor/

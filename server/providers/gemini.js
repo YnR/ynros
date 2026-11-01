@@ -1,5 +1,6 @@
 import { readSSE, httpError } from '../sse.js';
 import { resolveApiKey } from '../settings.js';
+import { callTool, MAX_TOOL_ROUNDS } from '../toolLoop.js';
 
 const BASE = process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com';
 
@@ -39,31 +40,69 @@ export function toContents(messages) {
   return out;
 }
 
-export async function* stream({ settings, messages, model, signal, fetchImpl = fetch }) {
+export async function* stream({ settings, messages, model, signal, fetchImpl = fetch, tools = [], runTool, systemNote = '' }) {
   const key = requireKey(settings);
   const cfg = settings.gemini;
   const id = encodeURIComponent(model || cfg.model);
-  const body = { contents: toContents(messages) };
-  if (cfg.systemPrompt) body.systemInstruction = { parts: [{ text: cfg.systemPrompt }] };
+  const contents = toContents(messages);
+  const system = [cfg.systemPrompt, tools.length ? systemNote : ''].filter(Boolean).join('\n\n');
+  const total = { input: 0, output: 0 };
 
-  const res = await fetchImpl(`${BASE}/v1beta/models/${id}:streamGenerateContent?alt=sse`, {
-    method: 'POST',
-    headers: { 'x-goog-api-key': key, 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-    signal,
-  });
-  if (!res.ok) throw await httpError(res, 'Gemini');
-
-  let usage = null;
-  for await (const { data } of readSSE(res.body)) {
-    if (!data || typeof data !== 'object') continue;
-    if (data.error) throw new Error(`Gemini: ${data.error.message}`);
-    const cand = data.candidates?.[0];
-    for (const part of cand?.content?.parts || []) {
-      if (part.text && !part.thought) yield { type: 'text', text: part.text };
+  for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+    const body = { contents };
+    if (system) body.systemInstruction = { parts: [{ text: system }] };
+    if (tools.length && round < MAX_TOOL_ROUNDS) {
+      body.tools = [{ functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description, parameters: geminiSchema(t.schema) })) }];
     }
-    if (cand?.finishReason && cand.finishReason !== 'STOP') yield { type: 'meta', stopReason: cand.finishReason };
-    if (data.usageMetadata) usage = data.usageMetadata;
+
+    const res = await fetchImpl(`${BASE}/v1beta/models/${id}:streamGenerateContent?alt=sse`, {
+      method: 'POST',
+      headers: { 'x-goog-api-key': key, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!res.ok) throw await httpError(res, 'Gemini');
+
+    const modelParts = [];
+    let usage = null;
+    let finish = null;
+    for await (const { data } of readSSE(res.body)) {
+      if (!data || typeof data !== 'object') continue;
+      if (data.error) throw new Error(`Gemini: ${data.error.message}`);
+      const cand = data.candidates?.[0];
+      for (const part of cand?.content?.parts || []) {
+        // Keep parts verbatim (including thought signatures) to send back with tool results.
+        modelParts.push(part);
+        if (part.text && !part.thought) yield { type: 'text', text: part.text };
+      }
+      if (cand?.finishReason) finish = cand.finishReason;
+      if (data.usageMetadata) usage = data.usageMetadata;
+    }
+    if (usage) { total.input += usage.promptTokenCount || 0; total.output += usage.candidatesTokenCount || 0; }
+
+    const calls = modelParts.filter((p) => p.functionCall);
+    if (!calls.length || !runTool) {
+      if (finish && finish !== 'STOP') yield { type: 'meta', stopReason: finish };
+      break;
+    }
+    contents.push({ role: 'model', parts: modelParts });
+    const responses = [];
+    for (const [i, p] of calls.entries()) {
+      const { name, args } = p.functionCall;
+      const r = yield* callTool({ id: p.functionCall.id || `call-${round}-${i}`, name, args: args || {}, runTool });
+      let response;
+      try { response = JSON.parse(r.output); } catch { response = { result: r.output }; }
+      if (Array.isArray(response) || typeof response !== 'object' || response === null) response = { result: response };
+      responses.push({ functionResponse: { name, ...(p.functionCall.id ? { id: p.functionCall.id } : {}), response } });
+    }
+    contents.push({ role: 'user', parts: responses });
+    yield { type: 'text', text: '\n\n' };
   }
-  if (usage) yield { type: 'meta', usage: { input: usage.promptTokenCount, output: usage.candidatesTokenCount } };
+  yield { type: 'meta', usage: total };
+}
+
+/** Gemini accepts an OpenAPI subset: drop empty `properties` objects. */
+function geminiSchema(schema) {
+  if (schema.type === 'object' && !Object.keys(schema.properties || {}).length) return undefined;
+  return schema;
 }

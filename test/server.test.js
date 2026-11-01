@@ -183,3 +183,45 @@ test('triage can recommend an interrupt, and only the user triggers it', async (
   assert.equal(done.messages[1].stopped, true);
   assert.equal(done.messages[2].content, 'STOP, wrong folder');
 });
+
+test('files: list, read and save Markdown inside the folder only', async () => {
+  const root = path.join(dataDir, 'notes');
+  await fs.mkdir(path.join(root, 'sub'), { recursive: true });
+  await fs.writeFile(path.join(root, 'sub', 'a.md'), '# A');
+  await fs.writeFile(path.join(root, 'secret.json'), '{}');
+  await fetch(`${base}/api/settings`, json('PUT', { files: { root } }));
+
+  const list = await (await fetch(`${base}/api/files`)).json();
+  assert.deepEqual(list.files.map((f) => f.path), [path.join('sub', 'a.md')]);
+
+  const file = await (await fetch(`${base}/api/files/content?path=sub/a.md`)).json();
+  assert.equal(file.content, '# A');
+
+  let res = await fetch(`${base}/api/files/content`, json('PUT', { path: 'sub/a.md', content: '# B', expectedMtime: file.mtime }));
+  assert.equal(res.status, 200);
+  assert.equal(await fs.readFile(path.join(root, 'sub', 'a.md'), 'utf8'), '# B');
+
+  res = await fetch(`${base}/api/files/content`, json('PUT', { path: 'sub/a.md', content: '# C', expectedMtime: file.mtime }));
+  assert.equal(res.status, 409, 'stale save is refused');
+
+  assert.equal((await fetch(`${base}/api/files/content?path=../settings.json`)).status, 403);
+  assert.equal((await fetch(`${base}/api/files/content?path=secret.json`)).status, 415);
+});
+
+test('tool endpoint for the Claude Code bridge requires its token', async () => {
+  const { local } = await import('../server/local.js');
+  assert.equal((await fetch(`${base}/api/tools`)).status, 401);
+  const res = await fetch(`${base}/api/tools`, { headers: { 'x-harness-token': local.token } });
+  assert.equal(res.status, 200);
+  assert.ok(Array.isArray((await res.json()).tools));
+});
+
+test('integrations status reports Google redirect URI and ICS feeds', async () => {
+  await fetch(`${base}/api/settings`, json('PUT', { calendars: { icsFeeds: 'Work | https://example.com/w.ics' } }));
+  const r = await (await fetch(`${base}/api/integrations`)).json();
+  assert.equal(r.google.connected, false);
+  assert.match(r.google.redirectUri, /^http:\/\/localhost:\d+\/api\/google\/callback$/);
+  assert.deepEqual(r.icsFeeds, [{ id: 'ics:1', name: 'Work' }]);
+  assert.ok(r.tools.includes('list_calendar_events'));
+  assert.ok(!r.tools.includes('gmail_search'), 'Gmail tools only appear once Google is connected');
+});

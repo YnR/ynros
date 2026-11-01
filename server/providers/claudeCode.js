@@ -12,7 +12,7 @@ function splitList(s) {
   return String(s || '').split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
 }
 
-export function buildArgs({ settings, model, sessionId }) {
+export function buildArgs({ settings, model, sessionId, mcpConfig }) {
   const cfg = settings.claudeCode;
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
   const m = model ?? cfg.model;
@@ -20,6 +20,11 @@ export function buildArgs({ settings, model, sessionId }) {
   if (sessionId) args.push('--resume', sessionId);
   if (cfg.permissionMode) args.push('--permission-mode', cfg.permissionMode);
   const tools = splitList(cfg.allowedTools);
+  if (mcpConfig) {
+    args.push('--mcp-config', JSON.stringify(mcpConfig));
+    // The harness tools only read data, create drafts, or add calendar events without emailing guests.
+    tools.push('mcp__harness');
+  }
   if (tools.length) args.push('--allowedTools', ...tools);
   if (cfg.systemPrompt) args.push('--append-system-prompt', cfg.systemPrompt);
   return args;
@@ -83,10 +88,10 @@ function toolResultText(block) {
  * Run one turn through the Claude Code CLI. Claude Code keeps its own history,
  * so only the newest user message is sent and the session is resumed by id.
  */
-export async function* stream({ settings, messages, model, signal, conversation, spawnImpl = nodeSpawn }) {
+export async function* stream({ settings, messages, model, signal, conversation, spawnImpl = nodeSpawn, mcpConfig }) {
   const cfg = settings.claudeCode;
   const prompt = [...messages].reverse().find((m) => m.role === 'user')?.content || '';
-  const args = buildArgs({ settings, model, sessionId: conversation?.claudeCodeSessionId });
+  const args = buildArgs({ settings, model, sessionId: conversation?.claudeCodeSessionId, mcpConfig });
 
   const child = spawnImpl(cfg.binaryPath || 'claude', args, {
     cwd: cfg.workingDirectory || undefined,

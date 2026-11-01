@@ -8,11 +8,21 @@
     "node": ">=20"
   },
   "scripts": {
+    "build": "node scripts/build.mjs",
+    "prestart": "npm run build",
     "start": "node server/index.js",
+    "predev": "npm run build",
     "dev": "node --watch server/index.js",
+    "predesktop": "npm run build",
+    "desktop": "electron electron/main.mjs",
     "test": "node --test test/*.test.js"
   },
   "devDependencies": {
-    "electron": "^38.8.6"
-  }
+    "electron": "^38.8.6",
+    "esbuild": "^0.25.12"
+  },
+  "dependencies": {
+    "@toast-ui/editor": "^3.2.2"
+  },
+  "main": "electron/main.mjs"
 }

@@ -6,6 +6,12 @@ import { loadSettings, updateSettings, publicSettings, PROVIDERS } from './setti
 import * as store from './store.js';
 import * as runs from './runs.js';
 import { triage } from './triage.js';
+import * as files from './files.js';
+import * as tools from './tools.js';
+import * as google from './integrations/google.js';
+import * as skillsLib from './integrations/skills.js';
+import { local } from './local.js';
+import crypto from 'node:crypto';
 import * as anthropic from './providers/anthropic.js';
 import * as gemini from './providers/gemini.js';
 import * as claudeCode from './providers/claudeCode.js';
@@ -248,6 +254,71 @@ async function route(req, res) {
 
   if (parts[1] === 'events' && parts.length === 2 && method === 'GET') return handleEvents(req, res);
 
+  if (parts[1] === 'tools') {
+    // Called by the local MCP bridge that Claude Code runs; requires its token.
+    const token = String(req.headers['x-harness-token'] || '');
+    const ok = token.length === local.token.length && crypto.timingSafeEqual(Buffer.from(token), Buffer.from(local.token));
+    if (!ok) throw new HttpError(401, 'Missing tool token');
+    const settings = await loadSettings();
+    if (parts.length === 2 && method === 'GET') {
+      const { tools: list } = await tools.availableTools(settings, { forClaudeCode: url.searchParams.get('for') === 'claudeCode' });
+      return sendJson(res, 200, { tools: list.map(({ name, description, schema }) => ({ name, description, schema })) });
+    }
+    if (parts.length === 3 && method === 'POST') {
+      try {
+        return sendJson(res, 200, { result: await tools.runTool(parts[2], await readJson(req), settings) });
+      } catch (e) {
+        return sendJson(res, 400, { error: e.message });
+      }
+    }
+  }
+
+  if (parts[1] === 'integrations' && parts.length === 2 && method === 'GET') {
+    const settings = await loadSettings();
+    const { tools: list, skills } = await tools.availableTools(settings);
+    return sendJson(res, 200, {
+      google: { ...(await google.status()), redirectUri: google.redirectUri(serverPort) },
+      icsFeeds: (await import('./integrations/ics.js')).parseFeeds(settings.calendars.icsFeeds).map(({ id, name }) => ({ id, name })),
+      tools: list.map((t) => t.name),
+      skills: skills.map(({ name, description }) => ({ name, description })),
+      skillDirs: skillsLib.skillDirs(settings),
+    });
+  }
+
+  if (parts[1] === 'google') {
+    const settings = await loadSettings();
+    if (parts[2] === 'auth' && method === 'GET') {
+      res.writeHead(302, { location: google.buildAuthUrl(settings, serverPort) });
+      return res.end();
+    }
+    if (parts[2] === 'callback' && method === 'GET') {
+      try {
+        await google.handleCallback(settings, Object.fromEntries(url.searchParams));
+        res.writeHead(302, { location: '/#/settings?google=connected' });
+      } catch (e) {
+        res.writeHead(302, { location: `/#/settings?google_error=${encodeURIComponent(e.message)}` });
+      }
+      return res.end();
+    }
+    if (parts[2] === 'disconnect' && method === 'POST') {
+      await readJson(req);
+      await google.disconnect();
+      return sendJson(res, 200, { ok: true });
+    }
+  }
+
+  if (parts[1] === 'files') {
+    const settings = await loadSettings();
+    const root = settings.files.root || settings.claudeCode.workingDirectory;
+    const rel = url.searchParams.get('path') || '';
+    if (parts.length === 2 && method === 'GET') return sendJson(res, 200, await files.listFiles(root));
+    if (parts[2] === 'content' && method === 'GET') return sendJson(res, 200, await files.readFile(root, rel));
+    if (parts[2] === 'content' && method === 'PUT') {
+      const body = await readJson(req);
+      return sendJson(res, 200, await files.writeFile(root, body.path, body.content, body.expectedMtime));
+    }
+  }
+
   if (parts[1] === 'settings' && parts.length === 2) {
     if (method === 'GET') return sendJson(res, 200, publicSettings(await loadSettings()));
     if (method === 'PUT') return sendJson(res, 200, publicSettings(await updateSettings(await readJson(req))));
@@ -346,7 +417,11 @@ async function serveStatic(res, pathname) {
   }
 }
 
+let serverPort = 4317;
+
 export function createServer({ port }) {
+  serverPort = port;
+  local.url = `http://127.0.0.1:${port}`;
   return http.createServer(async (req, res) => {
     if (!isAllowedRequest(req, port)) {
       res.writeHead(403, { 'content-type': 'text/plain' });

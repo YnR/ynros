@@ -1,5 +1,6 @@
 import { readSSE, httpError } from '../sse.js';
 import { resolveApiKey } from '../settings.js';
+import { callTool, MAX_TOOL_ROUNDS } from '../toolLoop.js';
 
 const BASE = process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
 const VERSION = '2023-06-01';
@@ -43,39 +44,83 @@ export function toApiMessages(messages) {
   return out;
 }
 
-export async function* stream({ settings, messages, model, signal, fetchImpl = fetch }) {
+export async function* stream({ settings, messages, model, signal, fetchImpl = fetch, tools = [], runTool, systemNote = '' }) {
   const key = requireKey(settings);
   const cfg = settings.anthropic;
-  const body = {
-    model: model || cfg.model,
-    max_tokens: cfg.maxTokens || 8192,
-    messages: toApiMessages(messages),
-    stream: true,
-  };
-  if (cfg.systemPrompt) body.system = cfg.systemPrompt;
+  const msgs = toApiMessages(messages);
+  const system = [cfg.systemPrompt, tools.length ? systemNote : ''].filter(Boolean).join('\n\n');
+  const total = { input: 0, output: 0 };
 
-  const res = await fetchImpl(`${BASE}/v1/messages`, {
-    method: 'POST', headers: headers(key), body: JSON.stringify(body), signal,
-  });
-  if (!res.ok) throw await httpError(res, 'Anthropic');
-
-  const usage = {};
-  for await (const { data } of readSSE(res.body)) {
-    if (!data || typeof data !== 'object') continue;
-    switch (data.type) {
-      case 'message_start':
-        Object.assign(usage, data.message?.usage);
-        break;
-      case 'content_block_delta':
-        if (data.delta?.type === 'text_delta') yield { type: 'text', text: data.delta.text };
-        break;
-      case 'message_delta':
-        Object.assign(usage, data.usage);
-        if (data.delta?.stop_reason) yield { type: 'meta', stopReason: data.delta.stop_reason };
-        break;
-      case 'error':
-        throw new Error(`Anthropic: ${data.error?.message || 'stream error'}`);
+  for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+    const body = {
+      model: model || cfg.model,
+      max_tokens: cfg.maxTokens || 8192,
+      messages: msgs,
+      stream: true,
+    };
+    if (system) body.system = system;
+    if (tools.length && round < MAX_TOOL_ROUNDS) {
+      body.tools = tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.schema }));
     }
+
+    const res = await fetchImpl(`${BASE}/v1/messages`, {
+      method: 'POST', headers: headers(key), body: JSON.stringify(body), signal,
+    });
+    if (!res.ok) throw await httpError(res, 'Anthropic');
+
+    const blocks = [];
+    let stopReason = null;
+    for await (const { data } of readSSE(res.body)) {
+      if (!data || typeof data !== 'object') continue;
+      switch (data.type) {
+        case 'message_start':
+          total.input += data.message?.usage?.input_tokens || 0;
+          break;
+        case 'content_block_start': {
+          const b = data.content_block || {};
+          blocks[data.index] = b.type === 'tool_use'
+            ? { type: 'tool_use', id: b.id, name: b.name, json: '' }
+            : b.type === 'text' ? { type: 'text', text: '' } : null;
+          break;
+        }
+        case 'content_block_delta': {
+          const b = blocks[data.index];
+          if (data.delta?.type === 'text_delta') {
+            if (b) b.text += data.delta.text;
+            yield { type: 'text', text: data.delta.text };
+          } else if (data.delta?.type === 'input_json_delta' && b) {
+            b.json += data.delta.partial_json;
+          }
+          break;
+        }
+        case 'message_delta':
+          total.output += data.usage?.output_tokens || 0;
+          if (data.delta?.stop_reason) stopReason = data.delta.stop_reason;
+          break;
+        case 'error':
+          throw new Error(`Anthropic: ${data.error?.message || 'stream error'}`);
+      }
+    }
+
+    const calls = blocks.filter((b) => b?.type === 'tool_use');
+    if (stopReason !== 'tool_use' || !calls.length || !runTool) {
+      if (stopReason && stopReason !== 'end_turn') yield { type: 'meta', stopReason };
+      break;
+    }
+    for (const c of calls) { try { c.input = c.json ? JSON.parse(c.json) : {}; } catch { c.input = {}; } }
+    msgs.push({
+      role: 'assistant',
+      content: blocks.filter(Boolean).filter((b) => b.type !== 'text' || b.text).map((b) => (b.type === 'text'
+        ? { type: 'text', text: b.text }
+        : { type: 'tool_use', id: b.id, name: b.name, input: b.input })),
+    });
+    const results = [];
+    for (const c of calls) {
+      const r = yield* callTool({ id: c.id, name: c.name, args: c.input, runTool });
+      results.push({ type: 'tool_result', tool_use_id: c.id, content: r.output, ...(r.isError ? { is_error: true } : {}) });
+    }
+    msgs.push({ role: 'user', content: results });
+    yield { type: 'text', text: '\n\n' };
   }
-  yield { type: 'meta', usage: { input: usage.input_tokens, output: usage.output_tokens } };
+  yield { type: 'meta', usage: total };
 }
