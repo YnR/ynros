@@ -1,0 +1,18 @@
+{
+  "name": "ynros-harness",
+  "version": "0.1.0",
+  "description": "Personal chat harness for Claude (API + Claude Code) and Gemini",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "electron": "^38.8.6"
+  }
+}

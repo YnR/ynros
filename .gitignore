@@ -147,3 +147,7 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Harness local data (if HARNESS_DATA_DIR points inside the repo)
+.harness-data/
+dist/

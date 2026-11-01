@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Harness</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-head">
+        <span class="brand">Harness</span>
+        <button class="btn primary" id="new-chat" title="New chat">+ New</button>
+      </div>
+      <nav class="conv-list" id="conv-list" aria-label="Conversations"></nav>
+      <a class="nav-link" href="#/settings" id="settings-link">⚙ Settings</a>
+    </aside>
+
+    <main class="main">
+      <section id="chat-view" class="view">
+        <header class="chat-head">
+          <button class="btn ghost icon" id="toggle-sidebar" aria-label="Toggle sidebar">☰</button>
+          <h1 id="chat-title">New chat</h1>
+          <button class="btn ghost small" id="rename-chat" hidden>Rename</button>
+          <button class="btn ghost small danger" id="delete-chat" hidden>Delete</button>
+        </header>
+        <div class="messages" id="messages">
+          <div class="empty" id="empty-state">
+            <h2>Start a conversation</h2>
+            <p>Pick a provider below. Connect providers in <a href="#/settings">Settings</a>.</p>
+          </div>
+        </div>
+        <form class="composer" id="composer">
+          <div class="composer-controls">
+            <select id="provider-select" aria-label="Provider">
+              <option value="anthropic">Claude (API)</option>
+              <option value="claudeCode">Claude Code</option>
+              <option value="gemini">Gemini</option>
+            </select>
+            <input id="model-input" list="model-options" placeholder="model" aria-label="Model" autocomplete="off">
+            <datalist id="model-options"></datalist>
+            <span class="status-dot" id="provider-status" title=""></span>
+          </div>
+          <div class="composer-row">
+            <textarea id="input" rows="1" placeholder="Message… (Enter to send, Shift+Enter for a new line)"></textarea>
+            <button class="btn primary" id="send" type="submit">Send</button>
+            <button class="btn" id="stop" type="button" hidden>Stop</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="settings-view" class="view" hidden>
+        <header class="chat-head">
+          <button class="btn ghost icon" data-toggle-sidebar aria-label="Toggle sidebar">☰</button>
+          <h1>Settings</h1>
+        </header>
+        <form class="settings" id="settings-form" autocomplete="off">
+          <p class="muted">Settings and keys are saved on this computer only, in <code id="data-dir">~/.ynros-harness</code>. Keys are never sent back to the browser.</p>
+
+          <label class="field">
+            <span>Default provider for new chats</span>
+            <select name="defaultProvider">
+              <option value="anthropic">Claude (API)</option>
+              <option value="claudeCode">Claude Code</option>
+              <option value="gemini">Gemini</option>
+            </select>
+          </label>
+
+          <fieldset class="card" data-provider="anthropic">
+            <legend>Claude (Anthropic API)</legend>
+            <label class="field">
+              <span>API key <small class="key-state"></small></span>
+              <input type="password" name="anthropic.apiKey" placeholder="sk-ant-…">
+              <small class="muted">Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>. Falls back to <code>ANTHROPIC_API_KEY</code>.</small>
+            </label>
+            <label class="field">
+              <span>Default model</span>
+              <input name="anthropic.model" list="anthropic-models">
+              <datalist id="anthropic-models"></datalist>
+            </label>
+            <label class="field">
+              <span>Max output tokens</span>
+              <input name="anthropic.maxTokens" type="number" min="1" step="1">
+            </label>
+            <label class="field">
+              <span>System prompt</span>
+              <textarea name="anthropic.systemPrompt" rows="3"></textarea>
+            </label>
+            <div class="card-actions">
+              <button type="button" class="btn" data-test="anthropic">Test connection</button>
+              <button type="button" class="btn ghost danger" data-clear="anthropic">Remove saved key</button>
+              <span class="test-result" data-result="anthropic"></span>
+            </div>
+          </fieldset>
+
+          <fieldset class="card" data-provider="claudeCode">
+            <legend>Claude Code (local CLI)</legend>
+            <p class="muted">Runs the <code>claude</code> CLI on this computer, using its own login. Each chat keeps its Claude Code session, so tools and file edits happen in the working directory below.</p>
+            <label class="field">
+              <span>CLI path</span>
+              <input name="claudeCode.binaryPath" placeholder="claude">
+            </label>
+            <label class="field">
+              <span>Working directory</span>
+              <input name="claudeCode.workingDirectory" placeholder="/path/to/project">
+            </label>
+            <label class="field">
+              <span>Model</span>
+              <input name="claudeCode.model" list="claudeCode-models" placeholder="CLI default">
+              <datalist id="claudeCode-models"></datalist>
+            </label>
+            <label class="field">
+              <span>Permission mode</span>
+              <select name="claudeCode.permissionMode">
+                <option value="">CLI default (tools needing approval are denied)</option>
+                <option value="plan">plan (read-only, no edits)</option>
+                <option value="acceptEdits">acceptEdits (auto-approve file edits)</option>
+                <option value="auto">auto</option>
+                <option value="dontAsk">dontAsk</option>
+                <option value="bypassPermissions">bypassPermissions (everything allowed, use with care)</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Allowed tools</span>
+              <input name="claudeCode.allowedTools" placeholder="e.g. Read Grep Glob Bash(git status:*)">
+              <small class="muted">Space- or comma-separated, passed as <code>--allowedTools</code>.</small>
+            </label>
+            <label class="field">
+              <span>Extra system prompt</span>
+              <textarea name="claudeCode.systemPrompt" rows="3"></textarea>
+            </label>
+            <div class="card-actions">
+              <button type="button" class="btn" data-test="claudeCode">Test connection</button>
+              <span class="test-result" data-result="claudeCode"></span>
+            </div>
+          </fieldset>
+
+          <fieldset class="card" data-provider="gemini">
+            <legend>Gemini (Google AI)</legend>
+            <label class="field">
+              <span>API key <small class="key-state"></small></span>
+              <input type="password" name="gemini.apiKey" placeholder="AIza…">
+              <small class="muted">Get one at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a>. Falls back to <code>GEMINI_API_KEY</code>.</small>
+            </label>
+            <label class="field">
+              <span>Default model</span>
+              <input name="gemini.model" list="gemini-models">
+              <datalist id="gemini-models"></datalist>
+            </label>
+            <label class="field">
+              <span>System prompt</span>
+              <textarea name="gemini.systemPrompt" rows="3"></textarea>
+            </label>
+            <div class="card-actions">
+              <button type="button" class="btn" data-test="gemini">Test connection</button>
+              <button type="button" class="btn ghost danger" data-clear="gemini">Remove saved key</button>
+              <span class="test-result" data-result="gemini"></span>
+            </div>
+          </fieldset>
+
+          <div class="settings-actions">
+            <button class="btn primary" type="submit">Save settings</button>
+            <span id="save-result" class="muted"></span>
+          </div>
+        </form>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
