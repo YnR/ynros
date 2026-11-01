@@ -225,3 +225,36 @@ test('integrations status reports Google redirect URI and ICS feeds', async () =
   assert.ok(r.tools.includes('list_calendar_events'));
   assert.ok(!r.tools.includes('gmail_search'), 'Gmail tools only appear once Google is connected');
 });
+
+test('projects: create a folder with CLAUDE.md and outputs, chats use it, @mentions resolve', async () => {
+  const host = path.join(dataDir, 'host');
+  await fetch(`${base}/api/settings`, json('PUT', { projects: { hostFolder: host }, claudeCode: { binaryPath: FAKE_CLAUDE } }));
+  const res = await fetch(`${base}/api/projects`, json('POST', { name: 'Trip Planning' }));
+  assert.equal(res.status, 201);
+  const project = await res.json();
+  assert.equal(project.path, path.join(host, 'Trip Planning'));
+  assert.match(await fs.readFile(path.join(project.path, 'CLAUDE.md'), 'utf8'), /# Trip Planning/);
+  assert.ok((await fs.stat(path.join(project.path, 'outputs'))).isDirectory());
+
+  const list = await (await fetch(`${base}/api/projects`)).json();
+  assert.equal(list.lastProjectId, project.id);
+  assert.equal(list.hostFolder, host);
+
+  await fs.writeFile(path.join(project.path, 'itinerary.md'), 'Day 1: Lisbon');
+  const m = await (await fetch(`${base}/api/mentions?project=${project.id}&q=itin`)).json();
+  assert.deepEqual(m.files.map((f) => f.path), ['itinerary.md']);
+
+  // Claude Code runs inside the project folder and the mention is recorded.
+  const conv = await (await fetch(`${base}/api/conversations`, json('POST', { provider: 'claudeCode', projectId: project.id }))).json();
+  assert.equal(conv.projectId, project.id);
+  await sendAndStream(conv.id, 'summarize @itinerary.md please');
+  const saved = await (await fetch(`${base}/api/conversations/${conv.id}`)).json();
+  assert.deepEqual(saved.messages[0].attachments, ['itinerary.md']);
+  assert.equal(saved.messages[0].providerContent, undefined, 'Claude Code reads files itself');
+
+  // Files view is scoped to the project.
+  const filesRes = await (await fetch(`${base}/api/files?project=${project.id}`)).json();
+  assert.ok(filesRes.files.some((f) => f.path === 'CLAUDE.md'));
+
+  assert.equal((await fetch(`${base}/api/projects`, json('POST', { name: 'Trip Planning' }))).status, 409);
+});

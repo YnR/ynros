@@ -7,6 +7,7 @@ import * as store from './store.js';
 import * as runs from './runs.js';
 import { triage } from './triage.js';
 import * as files from './files.js';
+import * as projects from './projects.js';
 import * as tools from './tools.js';
 import * as google from './integrations/google.js';
 import * as skillsLib from './integrations/skills.js';
@@ -76,6 +77,12 @@ function getProvider(name) {
   return p;
 }
 
+/** The folder a chat works in: its project, else the Claude Code working directory. */
+async function rootFor(settings, projectId) {
+  const project = await projects.getProject(settings, projectId);
+  return project?.path || settings.claudeCode.workingDirectory || null;
+}
+
 /** Add a user turn to the conversation and start a run for it. */
 async function beginTurn(conv, text, { provider: providerName, model, batch } = {}) {
   const settings = await loadSettings();
@@ -93,6 +100,19 @@ async function beginTurn(conv, text, { provider: providerName, model, batch } = 
   if (!conv.messages.length) conv.title = titleFrom(text);
   const msg = { role: 'user', content: text, ts: new Date().toISOString() };
   if (batch) msg.batch = batch;
+  // @mentions: API models get the file contents inline; Claude Code reads files itself.
+  const root = await rootFor(settings, conv.projectId);
+  if (root && text.includes('@')) {
+    try {
+      if (providerName === 'claudeCode') {
+        const found = await files.resolveMentions(root, text);
+        if (found.length) msg.attachments = found.map((f) => f.path);
+      } else {
+        const { content, attachments } = await files.expandMentions(root, text);
+        if (attachments.length) { msg.attachments = attachments; msg.providerContent = content; }
+      }
+    } catch (e) { console.warn('mentions:', e.message); }
+  }
   conv.messages.push(msg);
   await store.saveConversation(conv);
 
@@ -307,9 +327,41 @@ async function route(req, res) {
     }
   }
 
+  if (parts[1] === 'projects') {
+    const settings = await loadSettings();
+    if (parts.length === 2 && method === 'GET') {
+      return sendJson(res, 200, {
+        hostFolder: settings.projects.hostFolder || projects.defaultHostFolder(),
+        lastProjectId: settings.projects.lastProjectId || null,
+        projects: await projects.listProjects(settings),
+      });
+    }
+    if (parts.length === 2 && method === 'POST') {
+      const project = await projects.createProject(settings, await readJson(req));
+      await updateSettings({ projects: { lastProjectId: project.id } });
+      return sendJson(res, 201, project);
+    }
+    if (parts.length === 3 && method === 'DELETE') {
+      await projects.removeProject(parts[2]);
+      return sendJson(res, 200, { ok: true });
+    }
+  }
+
+  if (parts[1] === 'mentions' && parts.length === 2 && method === 'GET') {
+    const settings = await loadSettings();
+    let pid = url.searchParams.get('project');
+    const cid = url.searchParams.get('conversation');
+    if (!pid && cid) pid = (await store.getConversation(cid))?.projectId;
+    const root = await rootFor(settings, pid);
+    if (!root) return sendJson(res, 200, { root: null, files: [] });
+    return sendJson(res, 200, await files.listAllFiles(root, { query: url.searchParams.get('q') || '', limit: Number(url.searchParams.get('limit')) || 50 }));
+  }
+
   if (parts[1] === 'files') {
     const settings = await loadSettings();
-    const root = settings.files.root || settings.claudeCode.workingDirectory;
+    const pid = url.searchParams.get('project');
+    const project = pid ? await projects.getProject(settings, pid) : null;
+    const root = project?.path || settings.files.root || settings.claudeCode.workingDirectory;
     const rel = url.searchParams.get('path') || '';
     if (parts.length === 2 && method === 'GET') return sendJson(res, 200, await files.listFiles(root));
     if (parts[2] === 'content' && method === 'GET') return sendJson(res, 200, await files.readFile(root, rel));
@@ -360,7 +412,9 @@ async function route(req, res) {
         const settings = await loadSettings();
         const provider = PROVIDERS.includes(body.provider) ? body.provider : settings.defaultProvider;
         const model = body.model ?? settings[provider]?.model ?? '';
-        return sendJson(res, 201, await store.createConversation({ provider, model }));
+        const project = body.projectId ? await projects.getProject(settings, body.projectId) : null;
+        if (project) await updateSettings({ projects: { lastProjectId: project.id } });
+        return sendJson(res, 201, await store.createConversation({ provider, model, projectId: project?.id || null }));
       }
     } else if (parts.length === 3) {
       if (method === 'GET') {

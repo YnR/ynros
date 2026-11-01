@@ -19,6 +19,7 @@ export const SCOPES = {
   calendar: ['https://www.googleapis.com/auth/calendar.readonly', 'https://www.googleapis.com/auth/calendar.events'],
   gmail: ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.compose'],
   drive: ['https://www.googleapis.com/auth/drive.readonly'],
+  contacts: ['https://www.googleapis.com/auth/contacts.readonly'],
 };
 
 const pending = new Map(); // state -> { verifier, redirectUri, created }
@@ -28,7 +29,7 @@ export function redirectUri(port) {
 }
 
 export function scopesFor(cfg) {
-  return [...SCOPES.base, ...['calendar', 'gmail', 'drive'].filter((s) => cfg[s]).flatMap((s) => SCOPES[s])];
+  return [...SCOPES.base, ...['calendar', 'gmail', 'drive', 'contacts'].filter((s) => cfg[s]).flatMap((s) => SCOPES[s])];
 }
 
 export function buildAuthUrl(settings, port) {
@@ -111,6 +112,7 @@ export async function status() {
     calendar: SCOPES.calendar.some((s) => scope.includes(s)),
     gmail: SCOPES.gmail.some((s) => scope.includes(s)),
     drive: SCOPES.drive.some((s) => scope.includes(s)),
+    contacts: SCOPES.contacts.some((s) => scope.includes(s)),
   };
 }
 

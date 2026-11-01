@@ -34,11 +34,12 @@ export async function test(settings, fetchImpl = fetch) {
 export function toApiMessages(messages) {
   const out = [];
   for (const m of messages) {
-    if (!m.content) continue;
+    const text = m.providerContent || m.content;
+    if (!text) continue;
     const role = m.role === 'assistant' ? 'assistant' : 'user';
     const last = out[out.length - 1];
-    if (last && last.role === role) last.content += `\n\n${m.content}`;
-    else out.push({ role, content: m.content });
+    if (last && last.role === role) last.content += `\n\n${text}`;
+    else out.push({ role, content: text });
   }
   while (out.length && out[0].role !== 'user') out.shift();
   return out;
@@ -48,7 +49,7 @@ export async function* stream({ settings, messages, model, signal, fetchImpl = f
   const key = requireKey(settings);
   const cfg = settings.anthropic;
   const msgs = toApiMessages(messages);
-  const system = [cfg.systemPrompt, tools.length ? systemNote : ''].filter(Boolean).join('\n\n');
+  const system = [cfg.systemPrompt, systemNote].filter(Boolean).join('\n\n');
   const total = { input: 0, output: 0 };
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {

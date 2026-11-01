@@ -7,7 +7,7 @@ const SETTINGS_FILE = () => path.join(DATA_DIR, 'settings.json');
 
 export const PROVIDERS = ['anthropic', 'gemini', 'claudeCode'];
 // Every settings section the settings page may update.
-const SECTIONS = [...PROVIDERS, 'notifications', 'google', 'calendars', 'tools', 'triage', 'files'];
+const SECTIONS = [...PROVIDERS, 'notifications', 'google', 'calendars', 'tools', 'triage', 'files', 'projects', 'contacts'];
 // Values that are write-only: stored, but never sent back to the browser.
 const SECRETS = { anthropic: ['apiKey'], gemini: ['apiKey'], google: ['clientSecret'] };
 
@@ -43,6 +43,12 @@ export function defaultSettings() {
       calendar: true,
       gmail: true,
       drive: true,
+      contacts: true,
+    },
+    contacts: {
+      // vCard sources, one per line: a .vcf file path or URL.
+      vcardSources: '',
+      notebook: true,
     },
     calendars: {
       // One ICS feed per line, optionally "Name | https://…/calendar.ics".
@@ -50,6 +56,11 @@ export function defaultSettings() {
     },
     tools: {
       enabled: true,
+    },
+    projects: {
+      // Where new projects are created. Empty = ~/Harness Projects.
+      hostFolder: '',
+      lastProjectId: '',
     },
     files: {
       // Folder for the Markdown viewer/editor. Empty = Claude Code working directory.

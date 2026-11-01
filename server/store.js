@@ -17,7 +17,7 @@ export async function listConversations() {
     if (!f.endsWith('.json')) continue;
     try {
       const c = JSON.parse(await fs.readFile(path.join(DIR(), f), 'utf8'));
-      out.push({ id: c.id, title: c.title, provider: c.provider, model: c.model, updatedAt: c.updatedAt });
+      out.push({ id: c.id, title: c.title, provider: c.provider, model: c.model, projectId: c.projectId || null, updatedAt: c.updatedAt });
     } catch { /* skip corrupt file */ }
   }
   return out.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
@@ -41,7 +41,7 @@ export async function saveConversation(conv) {
   return conv;
 }
 
-export async function createConversation({ provider, model, title } = {}) {
+export async function createConversation({ provider, model, title, projectId = null } = {}) {
   const now = new Date().toISOString();
   return saveConversation({
     id: crypto.randomUUID(),
@@ -50,6 +50,7 @@ export async function createConversation({ provider, model, title } = {}) {
     model: model || '',
     createdAt: now,
     updatedAt: now,
+    projectId,
     claudeCodeSessionId: null,
     messages: [],
   });

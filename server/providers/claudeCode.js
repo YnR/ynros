@@ -88,13 +88,13 @@ function toolResultText(block) {
  * Run one turn through the Claude Code CLI. Claude Code keeps its own history,
  * so only the newest user message is sent and the session is resumed by id.
  */
-export async function* stream({ settings, messages, model, signal, conversation, spawnImpl = nodeSpawn, mcpConfig }) {
+export async function* stream({ settings, messages, model, signal, conversation, spawnImpl = nodeSpawn, mcpConfig, cwd }) {
   const cfg = settings.claudeCode;
   const prompt = [...messages].reverse().find((m) => m.role === 'user')?.content || '';
   const args = buildArgs({ settings, model, sessionId: conversation?.claudeCodeSessionId, mcpConfig });
 
   const child = spawnImpl(cfg.binaryPath || 'claude', args, {
-    cwd: cfg.workingDirectory || undefined,
+    cwd: cwd || cfg.workingDirectory || undefined,
     env: process.env,
     stdio: ['pipe', 'pipe', 'pipe'],
   });

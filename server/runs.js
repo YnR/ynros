@@ -3,33 +3,34 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as store from './store.js';
 import { availableTools, runTool, toolSystemNote } from './tools.js';
+import { getProject, readInstructions } from './projects.js';
 import { local } from './local.js';
 
 const MCP_SERVER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-server.js');
 
-/** Tools for this run: function tools for API models, an MCP bridge for Claude Code. */
-async function toolOptions(settings, providerName) {
+/** Tools, project folder and instructions for this run. */
+async function runOptions(settings, providerName, conv) {
   const isCC = providerName === 'claudeCode';
-  const { tools, skills } = await availableTools(settings, { forClaudeCode: isCC });
-  if (!tools.length) return {};
+  const project = await getProject(settings, conv.projectId);
+  const out = {};
+  if (project) out.cwd = project.path; // Claude Code reads CLAUDE.md from its working folder itself
+  const { tools, skills } = await availableTools(settings, { forClaudeCode: isCC, project });
   if (isCC) {
-    if (!local.url) return {};
-    return {
-      mcpConfig: {
+    if (tools.length && local.url) {
+      out.mcpConfig = {
         mcpServers: {
           harness: { command: process.execPath, args: [MCP_SERVER], env: { HARNESS_URL: local.url, HARNESS_TOKEN: local.token } },
         },
-      },
-    };
+      };
+    }
+    return out;
   }
-  return { tools, runTool: (name, args) => runTool(name, args, settings), systemNote: toolSystemNote(skills) };
+  out.tools = tools;
+  out.runTool = (name, args) => runTool(name, args, settings, { project });
+  out.systemNote = toolSystemNote(skills, { project, instructions: await readInstructions(project) });
+  return out;
 }
 
-/**
- * Runs execute on the server, independent of any browser tab. A tab can
- * subscribe to a conversation's run (getting a replay of everything so far),
- * and `hub` broadcasts run/subagent status for the sidebar and notifications.
- */
 export const hub = new EventEmitter();
 hub.setMaxListeners(0);
 
@@ -108,7 +109,7 @@ export function startRun({ conv, provider, providerName, model, settings, onFini
   (async () => {
     try {
       let extra = {};
-      try { extra = await toolOptions(settings, providerName); } catch (e) { console.warn('tools unavailable:', e.message); }
+      try { extra = await runOptions(settings, providerName, conv); } catch (e) { console.warn('tools unavailable:', e.message); }
       for await (const ev of provider.stream({
         settings, messages: conv.messages, model, signal: run.controller.signal, conversation: conv, ...extra,
       })) {

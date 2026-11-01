@@ -1,3 +1,4 @@
+import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';

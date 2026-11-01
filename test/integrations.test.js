@@ -1,3 +1,4 @@
+import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as ics from '../server/integrations/ics.js';
@@ -126,4 +127,43 @@ test('triage: parses verdicts and prefers a connected small model', () => {
   s.anthropic.apiKey = 'a';
   assert.deepEqual(pickTriageModel(s), { provider: 'anthropic', model: 'claude-haiku-5-5' });
   assert.match(buildTriagePrompt({ task: 'T', message: 'M', queued: ['Q'] }), /## New message\nM/);
+});
+
+test('mentions: API models get mentioned files inline', async () => {
+  const fs = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { expandMentions } = await import('../server/files.js');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mention-'));
+  await fs.writeFile(path.join(dir, 'a.md'), 'alpha');
+  await fs.writeFile(path.join(dir, 'my notes.txt'), 'beta');
+  const r = await expandMentions(dir, 'see @a.md and @"my notes.txt", not @missing.md or me@example.com');
+  assert.deepEqual(r.attachments, ['a.md', 'my notes.txt']);
+  assert.match(r.content, /<attached_file path="a.md">\nalpha\n<\/attached_file>/);
+  assert.match(r.content, /<attached_file path="my notes.txt">\nbeta/);
+  const outside = await expandMentions(dir, 'read @../../etc/passwd');
+  assert.deepEqual(outside.attachments, []);
+  await fs.rm(dir, { recursive: true });
+});
+
+test('contacts: vCard parsing, notebook notes, merged search', async () => {
+  const fs = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'people-'));
+  const contacts = await import('../server/integrations/contacts.js');
+  const vcf = path.join(dir, 'c.vcf');
+  await fs.writeFile(vcf, 'BEGIN:VCARD\nVERSION:3.0\nFN:Ada Lovelace\nEMAIL;TYPE=work:ada@example.com\nTEL:+44 1\nORG:Analytical;Engines\nEND:VCARD\nBEGIN:VCARD\nN:Hopper;Grace;;;\nEMAIL:grace@example.com\nEND:VCARD\n');
+  const parsed = contacts.parseVcards(await fs.readFile(vcf, 'utf8'));
+  assert.equal(parsed[1].name, 'Grace Hopper');
+  assert.equal(parsed[0].organization, 'Analytical, Engines');
+
+  const settings = defaultSettings();
+  settings.contacts.vcardSources = vcf;
+  await contacts.addNote({ email: 'ada@example.com', name: 'Ada', note: 'Prefers mornings' });
+  const r = await contacts.search(settings, 'ada');
+  assert.equal(r.results[0].name, 'Ada Lovelace');
+  assert.equal(r.results[0].notes[0].text, 'Prefers mornings');
+  assert.equal(r.results.length, 1, 'notebook entry merges with the contact');
+  await fs.rm(dir, { recursive: true });
 });

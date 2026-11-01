@@ -1,6 +1,10 @@
 import * as google from './integrations/google.js';
 import * as ics from './integrations/ics.js';
 import * as skills from './integrations/skills.js';
+import * as files from './files.js';
+import * as contacts from './integrations/contacts.js';
+import fsp from 'node:fs/promises';
+import pathMod from 'node:path';
 
 /**
  * Tools the models can call: Google Calendar, Gmail, Drive, ICS calendars and
@@ -272,6 +276,68 @@ export const TOOLS = [
     },
   },
   {
+    name: 'find_people',
+    group: 'people',
+    description: 'Look up people in the user\'s contacts (Google Contacts, vCard files) and in the people notebook. Returns names, emails, phones, organization and saved notes. Use it to resolve "who is X" or to find an email address before drafting mail or invites.',
+    schema: obj({
+      query: { type: 'string', description: 'Name, email, company or phone. Empty lists notebook entries.' },
+      max_results: { type: 'integer', description: 'Default 20.' },
+    }),
+    async run(args, { settings, googleStatus }) {
+      return contacts.search(settings, args.query || '', {
+        max: Math.min(Number(args.max_results) || 20, 100),
+        googleConnected: Boolean(googleStatus.contacts),
+      });
+    },
+  },
+  {
+    name: 'remember_about_person',
+    group: 'people',
+    description: 'Save a short note about a person in the local people notebook (e.g. preferences, context from a meeting, how they relate to the user). Only save what the user would want remembered.',
+    schema: obj({
+      name: { type: 'string' },
+      email: { type: 'string' },
+      note: { type: 'string' },
+    }, ['note']),
+    async run(args) {
+      return contacts.addNote(args);
+    },
+  },
+  {
+    name: 'project_list_files',
+    group: 'project',
+    description: 'List files in the current project folder (optionally filtered by a substring).',
+    schema: obj({ filter: { type: 'string' } }),
+    async run(args, { project }) {
+      return files.listAllFiles(project.path, { query: args.filter || '', limit: 500 });
+    },
+  },
+  {
+    name: 'project_read_file',
+    group: 'project',
+    description: 'Read a text file from the current project folder. Paths are relative to the project.',
+    schema: obj({ path: { type: 'string' } }, ['path']),
+    async run(args, { project }) {
+      const { abs, rel } = await files.resolveInside(project.path, args.path);
+      const buf = await fsp.readFile(abs);
+      if (buf.subarray(0, 8000).includes(0)) return { path: rel, note: 'Binary file, not shown.' };
+      return { path: rel, text: clip(buf.toString('utf8')) };
+    },
+  },
+  {
+    name: 'project_write_file',
+    group: 'project',
+    description: 'Create or overwrite a text file in the current project folder. Put deliverables in outputs/. Paths are relative to the project.',
+    schema: obj({ path: { type: 'string' }, content: { type: 'string' } }, ['path', 'content']),
+    async run(args, { project }) {
+      const { abs, rel } = await files.resolveInside(project.path, args.path);
+      if (rel === '' || rel.startsWith('..')) throw new Error('Invalid path');
+      await fsp.mkdir(pathMod.dirname(abs), { recursive: true });
+      await fsp.writeFile(abs, String(args.content));
+      return { saved: rel, bytes: Buffer.byteLength(String(args.content)) };
+    },
+  },
+  {
     name: 'load_skill',
     group: 'skills',
     description: 'Load the full instructions of a skill by name. Call this before doing a task that one of the listed skills covers.',
@@ -284,7 +350,7 @@ export const TOOLS = [
 ];
 
 /** Which tools are usable right now, given settings and connections. */
-export async function availableTools(settings, { forClaudeCode = false } = {}) {
+export async function availableTools(settings, { forClaudeCode = false, project = null } = {}) {
   if (settings.tools?.enabled === false) return { tools: [], skills: [], googleStatus: { connected: false } };
   const googleStatus = await google.status();
   const hasFeeds = ics.parseFeeds(settings.calendars.icsFeeds).length > 0;
@@ -292,6 +358,11 @@ export async function availableTools(settings, { forClaudeCode = false } = {}) {
   const skillList = forClaudeCode ? [] : await skills.listSkills(settings);
   const tools = TOOLS.filter((t) => {
     if (t.group === 'skills') return !forClaudeCode && skillList.length > 0; // Claude Code has its own skills
+    if (t.group === 'people') {
+      const anySource = (googleStatus.contacts && settings.google.contacts) || contacts.parseSources(settings.contacts?.vcardSources).length;
+      return t.name === 'remember_about_person' ? settings.contacts?.notebook !== false : Boolean(anySource) || settings.contacts?.notebook !== false;
+    }
+    if (t.group === 'project') return !forClaudeCode && Boolean(project); // Claude Code edits files itself
     if (t.needsGoogle) return googleStatus[t.needsGoogle] && settings.google[t.needsGoogle];
     if (t.group === 'calendar') return hasGoogleCal || hasFeeds;
     return true;
@@ -299,16 +370,21 @@ export async function availableTools(settings, { forClaudeCode = false } = {}) {
   return { tools, skills: skillList, googleStatus };
 }
 
-export async function runTool(name, args, settings) {
+export async function runTool(name, args, settings, { project = null } = {}) {
   const tool = TOOLS.find((t) => t.name === name);
   if (!tool) throw new Error(`Unknown tool ${name}`);
+  if (tool.group === 'project' && !project) throw new Error('This chat is not in a project');
   const googleStatus = await google.status();
-  return tool.run(args || {}, { settings, googleStatus });
+  return tool.run(args || {}, { settings, googleStatus, project });
 }
 
 /** Extra system text so API models know about skills and the current date. */
-export function toolSystemNote(skillList) {
+export function toolSystemNote(skillList, { project = null, instructions = '' } = {}) {
   const lines = [`Current date and time: ${new Date().toString()}.`];
+  if (project) {
+    lines.push('', `You are working in the project "${project.name}" (folder: ${project.path}). Use the project_* tools to read and write its files, and save deliverables in outputs/.`);
+    if (instructions) lines.push('', '<project_instructions source="CLAUDE.md">', instructions.trim(), '</project_instructions>');
+  }
   if (skillList.length) {
     lines.push('', 'Skills are available. When a task matches one, call load_skill with its name first and follow its instructions:',
       ...skillList.map((s) => `- ${s.name}: ${s.description}`));
