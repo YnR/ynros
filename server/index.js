@@ -8,6 +8,7 @@ import * as runs from './runs.js';
 import { triage } from './triage.js';
 import * as files from './files.js';
 import * as projects from './projects.js';
+import * as quota from './quota.js';
 import * as tools from './tools.js';
 import * as google from './integrations/google.js';
 import * as skillsLib from './integrations/skills.js';
@@ -122,19 +123,77 @@ async function beginTurn(conv, text, { provider: providerName, model, batch } = 
   });
 }
 
+const holdTimers = new Map();
+
+/** Park the queue until quota frees up, and offer other providers meanwhile. */
+async function holdForQuota(conv, check) {
+  const settings = await loadSettings();
+  conv.quotaHold = {
+    provider: check.provider,
+    label: check.label,
+    reason: check.reason,
+    resetsAt: check.resetsAt || null,
+    utilization: check.utilization,
+    reservePercent: check.reservePercent,
+    alternatives: await quota.alternatives(settings, check.provider),
+  };
+  await store.saveConversation(conv);
+  queueEvent(conv);
+  scheduleResume(conv.id, check.resetsAt);
+}
+
+function scheduleResume(id, resetsAt) {
+  clearTimeout(holdTimers.get(id));
+  // Unknown reset time: look again in 15 minutes.
+  const at = resetsAt ? Math.max(resetsAt + 5000, Date.now() + 5000) : Date.now() + 15 * 60_000;
+  const t = setTimeout(async () => {
+    holdTimers.delete(id);
+    if (runs.getRun(id)) return;
+    const conv = await store.getConversation(id);
+    if (conv?.quotaHold && conv.queue?.length) await drainQueue(conv, null);
+  }, Math.min(at - Date.now(), 2 ** 31 - 1));
+  t.unref?.();
+  holdTimers.set(id, t);
+}
+
 /** After a run ends, send everything that was queued as one batch. */
-async function drainQueue(conv, run) {
-  if (!conv.queue?.length) return;
+async function drainQueue(conv, run, { force = false } = {}) {
+  // A usage limit stopped the run: queue a "continue" so the work resumes later.
+  if (run?.quotaLimited) {
+    conv.queue ||= [];
+    if (!conv.queue.some((q) => q.auto)) {
+      conv.queue.unshift({
+        id: `q-${Date.now()}-${++queueSeq}`,
+        text: 'Continue the task you were working on. You were stopped by a usage limit before finishing.',
+        ts: new Date().toISOString(),
+        auto: true,
+        triage: { status: 'done', decision: 'queue', reason: 'Resumes when the usage limit resets.' },
+      });
+    }
+  }
+  if (!conv.queue?.length) {
+    if (conv.quotaHold) { conv.quotaHold = null; await store.saveConversation(conv); queueEvent(conv); }
+    return;
+  }
   // A manual Stop pauses the queue; the user can send it with "Send now".
   if (run?.stopReason === 'user') {
     conv.queuePaused = true;
     await store.saveConversation(conv);
-    runs.hub.emit('update', { type: 'queue', conversationId: conv.id, queue: conv.queue, paused: true });
+    queueEvent(conv);
     return;
+  }
+  const settings = await loadSettings();
+  const provider = conv.provider || settings.defaultProvider;
+  if (!force) {
+    // Queued work is automatic: it may not dip into the reserve kept for new instructions.
+    const check = await quota.check(settings, provider, 'auto');
+    if (!check.ok) return holdForQuota(conv, check);
   }
   const items = conv.queue;
   conv.queue = [];
   conv.queuePaused = false;
+  conv.quotaHold = null;
+  clearTimeout(holdTimers.get(conv.id));
   const text = items.length === 1
     ? items[0].text
     : `While you were working I sent these additional instructions. Handle them together:\n\n${
@@ -143,9 +202,20 @@ async function drainQueue(conv, run) {
 }
 
 function queueEvent(conv) {
-  const ev = { type: 'queue', conversationId: conv.id, queue: conv.queue || [], paused: Boolean(conv.queuePaused) };
+  const ev = {
+    type: 'queue', conversationId: conv.id, queue: conv.queue || [],
+    paused: Boolean(conv.queuePaused), quotaHold: conv.quotaHold || null,
+  };
   runs.emitTo(conv.id, ev);
   runs.hub.emit('update', ev);
+}
+
+/** On startup, re-arm resume timers for chats waiting on a usage limit. */
+export async function rearmHolds() {
+  for (const c of await store.listConversations()) {
+    const conv = await store.getConversation(c.id);
+    if (conv?.quotaHold && conv.queue?.length) scheduleResume(conv.id, conv.quotaHold.resetsAt);
+  }
 }
 
 let queueSeq = 0;
@@ -159,10 +229,25 @@ async function handleChat(req, res, id) {
   if (!conv) throw new HttpError(404, 'Conversation not found');
 
   if (!active) {
+    const settings = await loadSettings();
+    const provider = body.provider || conv.provider || settings.defaultProvider;
+    const check = await quota.check(settings, provider, 'user');
+    if (!check.ok) {
+      // Out of quota: keep the message, wait for the reset, and offer to switch.
+      const item = { id: `q-${Date.now()}-${++queueSeq}`, text, ts: new Date().toISOString(), triage: { status: 'done', decision: 'queue', reason: 'Waiting for the usage limit to reset.' } };
+      conv.queue ||= [];
+      conv.queue.push(item);
+      if (body.provider) conv.provider = body.provider;
+      if (body.model !== undefined) conv.model = body.model;
+      if (!conv.messages.length) conv.title = titleFrom(text);
+      await holdForQuota(conv, check);
+      return sendJson(res, 202, { queued: true, item, quotaHold: conv.quotaHold });
+    }
     // A paused queue (after Stop) goes out together with the new message.
     const pending = conv.queue || [];
     conv.queue = [];
     conv.queuePaused = false;
+    conv.quotaHold = null;
     const all = [...pending.map((q) => q.text), text];
     const combined = all.length === 1 ? text
       : `Here are my instructions, including ones I sent while you were working. Handle them together:\n\n${
@@ -223,9 +308,9 @@ async function handleQueueAction(req, res, id, itemId, action) {
     return sendJson(res, 200, { queue: conv.queue });
   }
   if (action === 'send') {
-    // "Interrupt now" on a running chat, or "Send now" on a paused queue.
+    // "Interrupt now" on a running chat, or "Send now" on a paused or held queue.
     if (active) runs.stopRun(id, 'interrupt');
-    else await drainQueue(conv, null);
+    else await drainQueue(conv, null, { force: true });
     return sendJson(res, 200, { ok: true });
   }
   throw new HttpError(404, 'Not found');
@@ -273,6 +358,13 @@ async function route(req, res) {
   if (parts[0] !== 'api') return serveStatic(res, url.pathname);
 
   if (parts[1] === 'events' && parts.length === 2 && method === 'GET') return handleEvents(req, res);
+
+  if (parts[1] === 'quota' && parts.length === 2 && method === 'GET') {
+    const settings = await loadSettings();
+    const out = {};
+    for (const p of PROVIDERS) out[p] = { ...(await quota.status(settings, p)), alternatives: await quota.alternatives(settings, p) };
+    return sendJson(res, 200, out);
+  }
 
   if (parts[1] === 'tools') {
     // Called by the local MCP bridge that Claude Code runs; requires its token.
@@ -441,6 +533,21 @@ async function route(req, res) {
       return handleChat(req, res, id);
     } else if (parts[3] === 'stream' && parts.length === 4 && method === 'GET') {
       return handleStream(req, res, id);
+    } else if (parts[3] === 'switch' && parts.length === 4 && method === 'POST') {
+      // Move the chat to another provider (e.g. when one is out of quota) and send what is waiting.
+      const body = await readJson(req);
+      if (!PROVIDERS.includes(body.provider)) throw new HttpError(400, 'Unknown provider');
+      const c = runs.getRun(id)?.conv || await store.getConversation(id);
+      if (!c) throw new HttpError(404, 'Not found');
+      const settings = await loadSettings();
+      c.provider = body.provider;
+      c.model = body.model ?? settings[body.provider]?.model ?? '';
+      c.quotaHold = null;
+      clearTimeout(holdTimers.get(id));
+      await store.saveConversation(c);
+      if (!runs.getRun(id) && c.queue?.length) await drainQueue(c, null, { force: true });
+      else queueEvent(c);
+      return sendJson(res, 200, { provider: c.provider, model: c.model });
     } else if (parts[3] === 'stop' && parts.length === 4 && method === 'POST') {
       return sendJson(res, 200, { stopped: runs.stopRun(id, 'user') });
     } else if (parts[3] === 'queue' && parts.length === 6 && method === 'POST') {
@@ -497,5 +604,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const host = process.env.HOST || '127.0.0.1';
   createServer({ port }).listen(port, host, () => {
     console.log(`Harness running at http://localhost:${port}`);
+    rearmHolds().catch(() => {});
   });
 }

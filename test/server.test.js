@@ -258,3 +258,38 @@ test('projects: create a folder with CLAUDE.md and outputs, chats use it, @menti
 
   assert.equal((await fetch(`${base}/api/projects`, json('POST', { name: 'Trip Planning' }))).status, 409);
 });
+
+test('quota: a usage limit parks the work, queues a continue, and offers other providers', async () => {
+  await fetch(`${base}/api/settings`, json('PUT', { claudeCode: { binaryPath: FAKE_CLAUDE, workingDirectory: dataDir }, gemini: { apiKey: 'g-key' } }));
+  const conv = await (await fetch(`${base}/api/conversations`, json('POST', { provider: 'claudeCode' }))).json();
+  await sendAndStream(conv.id, 'please hit limit');
+  const held = await waitFor(async () => {
+    const c = await (await fetch(`${base}/api/conversations/${conv.id}`)).json();
+    return !c.running && c.quotaHold && c;
+  });
+  assert.equal(held.quotaHold.reason, 'exhausted');
+  assert.ok(held.quotaHold.resetsAt > Date.now());
+  assert.ok(held.quotaHold.alternatives.some((a) => a.provider === 'gemini'));
+  assert.equal(held.queue[0].auto, true);
+  assert.equal(held.messages[1].quotaLimited, true);
+
+  // New messages wait too, instead of failing.
+  const r = await (await fetch(`${base}/api/conversations/${conv.id}/messages`, json('POST', { text: 'and this' }))).json();
+  assert.equal(r.queued, true);
+
+  const q = await (await fetch(`${base}/api/quota`)).json();
+  assert.equal(q.claudeCode.exhausted, true);
+
+  // Switching provider sends what was waiting (it fails here: the Gemini key is fake, which is fine).
+  await fetch(`${base}/api/conversations/${conv.id}/switch`, json('POST', { provider: 'gemini' }));
+  const moved = await waitFor(async () => {
+    const c = await (await fetch(`${base}/api/conversations/${conv.id}`)).json();
+    return !c.running && c.messages.length === 4 && c;
+  });
+  assert.equal(moved.provider, 'gemini');
+  assert.equal(moved.quotaHold, null);
+  assert.deepEqual(moved.messages[2].batch.length, 2);
+  // Reset for later tests.
+  (await import('../server/quota.js'))._reset();
+  await fetch(`${base}/api/settings`, json('PUT', { gemini: { clearApiKey: true } }));
+});

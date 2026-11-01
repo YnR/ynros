@@ -143,6 +143,16 @@ export async function* stream({ settings, messages, model, signal, conversation,
       let ev;
       try { ev = JSON.parse(line); } catch { continue; }
 
+      if (ev.type === 'rate_limit_event' && ev.rate_limit_info) {
+        const r = ev.rate_limit_info;
+        yield {
+          type: 'quota',
+          status: r.status,
+          utilization: typeof r.utilization === 'number' ? r.utilization : undefined,
+          resetsAt: r.resetsAt ? r.resetsAt * 1000 : undefined,
+        };
+        continue;
+      }
       if (ev.type === 'system') {
         if (ev.subtype === 'init') {
           yield { type: 'meta', sessionId: ev.session_id, model: ev.model };

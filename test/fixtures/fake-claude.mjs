@@ -16,6 +16,14 @@ process.stdin.on('end', async () => {
     return;
   }
   if (input.includes('slow')) await new Promise((r) => setTimeout(r, 600));
+  if (input.includes('hit limit')) {
+    const out = (o) => process.stdout.write(`${JSON.stringify(o)}\n`);
+    const resetsAt = Math.floor(Date.now() / 1000) + 3600;
+    out({ type: 'system', subtype: 'init', session_id: 'lim' });
+    out({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', utilization: 1, resetsAt } });
+    out({ type: 'result', subtype: 'error_during_execution', is_error: true, result: `Claude AI usage limit reached|${resetsAt}`, session_id: 'lim' });
+    return;
+  }
   const args = process.argv.slice(2);
   const resume = args.includes('--resume') ? args[args.indexOf('--resume') + 1] : null;
   const sid = resume || 'sess-123';

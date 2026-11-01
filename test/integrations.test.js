@@ -167,3 +167,24 @@ test('contacts: vCard parsing, notebook notes, merged search', async () => {
   assert.equal(r.results.length, 1, 'notebook entry merges with the contact');
   await fs.rm(dir, { recursive: true });
 });
+
+test('quota: the reserve blocks automatic work but not new instructions', async () => {
+  const quota = await import('../server/quota.js');
+  quota._reset();
+  const s = defaultSettings();
+  await quota.update('claudeCode', { status: 'allowed_warning', utilization: 0.96, resetsAt: Date.now() + 3_600_000 });
+  assert.equal((await quota.check(s, 'claudeCode', 'user')).ok, true);
+  const auto = await quota.check(s, 'claudeCode', 'auto');
+  assert.equal(auto.ok, false);
+  assert.equal(auto.reason, 'reserve');
+  await quota.update('claudeCode', { utilization: 0.5 });
+  assert.equal((await quota.check(s, 'claudeCode', 'auto')).ok, true);
+
+  // Token budgets for API keys.
+  s.quota.anthropic = { budget: 1000, windowHours: 1 };
+  await quota.record('anthropic', { input: 600, output: 400 });
+  assert.equal((await quota.check(s, 'anthropic', 'user')).reason, 'exhausted');
+
+  assert.deepEqual(quota.limitFromError('Claude AI usage limit reached|1793580000'), { status: 'rejected', resetsAt: 1793580000000 });
+  assert.equal(quota.limitFromError('some other failure'), null);
+});

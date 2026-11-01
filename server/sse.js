@@ -52,5 +52,12 @@ export async function httpError(res, label) {
   } catch { /* ignore */ }
   const err = new Error(`${label} ${res.status}: ${detail || res.statusText}`.trim());
   err.status = res.status;
+  if (res.status === 429) {
+    // Usage limit: remember when it is expected to clear.
+    const retry = Number(res.headers?.get?.('retry-after'));
+    const delay = detail.match(/retry in (\d+(?:\.\d+)?)s/i) || detail.match(/"retryDelay":\s*"(\d+)s"/);
+    const secs = Number.isFinite(retry) && retry > 0 ? retry : delay ? Number(delay[1]) : null;
+    err.quota = { status: 'rejected', resetsAt: secs ? Date.now() + secs * 1000 : null };
+  }
   return err;
 }

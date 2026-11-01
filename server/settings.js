@@ -7,7 +7,7 @@ const SETTINGS_FILE = () => path.join(DATA_DIR, 'settings.json');
 
 export const PROVIDERS = ['anthropic', 'gemini', 'claudeCode'];
 // Every settings section the settings page may update.
-const SECTIONS = [...PROVIDERS, 'notifications', 'google', 'calendars', 'tools', 'triage', 'files', 'projects', 'contacts'];
+const SECTIONS = [...PROVIDERS, 'notifications', 'google', 'calendars', 'tools', 'triage', 'files', 'projects', 'contacts', 'quota'];
 // Values that are write-only: stored, but never sent back to the browser.
 const SECRETS = { anthropic: ['apiKey'], gemini: ['apiKey'], google: ['clientSecret'] };
 
@@ -61,6 +61,15 @@ export function defaultSettings() {
       // Where new projects are created. Empty = ~/Harness Projects.
       hostFolder: '',
       lastProjectId: '',
+    },
+    quota: {
+      // Keep this share of each provider's window for new instructions:
+      // queued and resumed work waits once usage passes 100 - reservePercent.
+      reservePercent: 5,
+      // Optional token budgets per rolling window (0 = rely on the provider's own limits).
+      anthropic: { budget: 0, windowHours: 24 },
+      gemini: { budget: 0, windowHours: 24 },
+      claudeCode: { budget: 0, windowHours: 5 },
     },
     files: {
       // Folder for the Markdown viewer/editor. Empty = Claude Code working directory.
@@ -171,6 +180,14 @@ export async function updateSettings(patch) {
         continue;
       }
       const type = typeof defaults[section][k];
+      if (type === 'object' && v && typeof v === 'object') {
+        for (const [kk, vv] of Object.entries(v)) {
+          if (!(kk in defaults[section][k])) continue;
+          const n = Number(vv);
+          if (Number.isFinite(n) && n >= 0) current[section][k][kk] = n;
+        }
+        continue;
+      }
       if (type === 'boolean') current[section][k] = v === true || v === 'true' || v === 'on';
       else if (type === 'number') {
         const n = Number(v);

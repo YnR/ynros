@@ -5,6 +5,7 @@ import * as store from './store.js';
 import { availableTools, runTool, toolSystemNote } from './tools.js';
 import { getProject, readInstructions } from './projects.js';
 import { local } from './local.js';
+import * as quota from './quota.js';
 
 const MCP_SERVER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-server.js');
 
@@ -120,8 +121,11 @@ export function startRun({ conv, provider, providerName, model, settings, onFini
           if (existing) Object.assign(existing, ev);
           else assistant.events.push({ ...ev });
         }
-        else if (ev.type === 'error') assistant.error = ev.message;
-        else if (ev.type === 'subagent') {
+        else if (ev.type === 'error') {
+          assistant.error = ev.message;
+          const limit = quota.limitFromError(ev.message);
+          if (limit) run.quotaLimited = limit;
+        } else if (ev.type === 'subagent') {
           const sa = applySubagent(conv.subagents, ev);
           sa.runId = run.id;
           emit({ type: 'subagent', subagent: { ...sa } });
@@ -129,9 +133,13 @@ export function startRun({ conv, provider, providerName, model, settings, onFini
           // Persist subagent progress now and then so a reload sees it.
           if (Date.now() - lastSave > 2000) { lastSave = Date.now(); store.saveConversation(conv).catch(() => {}); }
           continue;
+        } else if (ev.type === 'quota') {
+          const st = await quota.update(providerName, ev);
+          hub.emit('update', { type: 'quota', provider: providerName, ...st });
+          continue;
         } else if (ev.type === 'meta') {
           if (ev.sessionId) conv.claudeCodeSessionId = ev.sessionId;
-          if (ev.usage) assistant.usage = ev.usage;
+          if (ev.usage) { assistant.usage = ev.usage; quota.record(providerName, ev.usage); }
           if (ev.costUsd != null) assistant.costUsd = ev.costUsd;
           if (ev.model && !assistant.model) assistant.model = ev.model;
         }
@@ -140,8 +148,15 @@ export function startRun({ conv, provider, providerName, model, settings, onFini
     } catch (e) {
       if (!run.controller.signal.aborted) {
         assistant.error = e.message;
+        const limit = quota.limitFromError(e);
+        if (limit) run.quotaLimited = limit;
         emit({ type: 'error', message: e.message });
       }
+    }
+    if (run.quotaLimited) {
+      assistant.quotaLimited = true;
+      const st = await quota.update(providerName, run.quotaLimited);
+      hub.emit('update', { type: 'quota', provider: providerName, ...st });
     }
     if (run.controller.signal.aborted) assistant.stopped = true;
     for (const sa of conv.subagents) {
@@ -157,6 +172,7 @@ export function startRun({ conv, provider, providerName, model, settings, onFini
     try { await store.saveConversation(conv); } catch (e) { console.error('save failed', e); }
 
     run.status = assistant.stopped ? 'stopped' : assistant.error ? 'error' : 'done';
+    run.providerName = providerName;
     emit({ type: 'done', message: assistant });
     runs.delete(conv.id);
     recent.set(conv.id, run);
