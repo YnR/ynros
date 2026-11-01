@@ -16,6 +16,7 @@
         <button class="btn primary" id="new-chat" title="New chat">+ New</button>
       </div>
       <nav class="conv-list" id="conv-list" aria-label="Conversations"></nav>
+      <a class="nav-link" href="#/files" id="files-link">📝 Files</a>
       <a class="nav-link" href="#/settings" id="settings-link">⚙ Settings</a>
     </aside>
 
@@ -27,6 +28,12 @@
           <button class="btn ghost small" id="rename-chat" hidden>Rename</button>
           <button class="btn ghost small danger" id="delete-chat" hidden>Delete</button>
         </header>
+        <section class="subagents" id="subagents" hidden aria-live="polite">
+          <button class="subagents-head" id="subagents-toggle" type="button" aria-expanded="true">
+            <span id="subagents-summary">Subagents</span><span class="chev">▾</span>
+          </button>
+          <ul class="subagent-list" id="subagent-list"></ul>
+        </section>
         <div class="messages" id="messages">
           <div class="empty" id="empty-state">
             <h2>Start a conversation</h2>
@@ -34,6 +41,7 @@
           </div>
         </div>
         <form class="composer" id="composer">
+          <div class="queue" id="queue" hidden></div>
           <div class="composer-controls">
             <select id="provider-select" aria-label="Provider">
               <option value="anthropic">Claude (API)</option>
@@ -47,9 +55,36 @@
           <div class="composer-row">
             <textarea id="input" rows="1" placeholder="Message… (Enter to send, Shift+Enter for a new line)"></textarea>
             <button class="btn primary" id="send" type="submit">Send</button>
+            <span class="running-label" id="running-label" hidden>Working…</span>
             <button class="btn" id="stop" type="button" hidden>Stop</button>
           </div>
         </form>
+      </section>
+
+      <section id="files-view" class="view" hidden>
+        <header class="chat-head">
+          <button class="btn ghost icon" data-toggle-sidebar aria-label="Toggle sidebar">☰</button>
+          <h1 id="file-title">Files</h1>
+          <div class="seg" role="tablist" id="file-mode" hidden>
+            <button type="button" data-mode="view" class="on">View</button>
+            <button type="button" data-mode="edit">Edit</button>
+          </div>
+          <span class="muted small" id="file-state"></span>
+          <button class="btn primary small" id="file-save" hidden>Save</button>
+        </header>
+        <div class="files">
+          <aside class="file-list">
+            <input id="file-filter" placeholder="Filter files…" aria-label="Filter files">
+            <div class="muted small" id="file-root"></div>
+            <div class="file-actions"><button class="btn small" id="file-new" type="button">+ New file</button><button class="btn ghost small" id="file-refresh" type="button">Refresh</button></div>
+            <nav id="file-items"></nav>
+          </aside>
+          <div class="file-pane">
+            <div class="empty" id="file-empty"><h2>Markdown files</h2><p>Pick a file to read it, or switch to Edit to change it in a WYSIWYG editor.</p></div>
+            <div id="file-viewer" class="md-view" hidden></div>
+            <div id="file-editor" hidden></div>
+          </div>
+        </div>
       </section>
 
       <section id="settings-view" class="view" hidden>
@@ -161,6 +196,83 @@
             </div>
           </fieldset>
 
+          <fieldset class="card">
+            <legend>Notifications</legend>
+            <label class="check"><input type="checkbox" name="notifications.enabled"> Notify me when a reply is ready or a chat needs me</label>
+            <label class="check"><input type="checkbox" name="notifications.onlyWhenUnfocused"> Only when this window isn't in focus</label>
+            <div class="card-actions">
+              <button type="button" class="btn" id="notify-permission">Allow browser notifications</button>
+              <button type="button" class="btn ghost" id="notify-test">Send a test</button>
+              <span class="muted" id="notify-state"></span>
+            </div>
+          </fieldset>
+
+          <fieldset class="card">
+            <legend>Messages sent while working</legend>
+            <p class="muted">New messages wait in a queue and go out together when the current task finishes. A small, fast model checks each one and suggests interrupting when it looks urgent. It never interrupts without asking you.</p>
+            <label class="check"><input type="checkbox" name="triage.enabled"> Check queued messages with a small model</label>
+            <label class="field">
+              <span>Triage model</span>
+              <select name="triage.provider">
+                <option value="auto">Automatic (Claude Haiku, then Gemini Flash-Lite, then Claude Code Haiku)</option>
+                <option value="anthropic">Claude API</option>
+                <option value="gemini">Gemini</option>
+                <option value="claudeCode">Claude Code</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Model override</span>
+              <input name="triage.model" placeholder="Leave blank for the provider's small model">
+            </label>
+          </fieldset>
+
+          <fieldset class="card" id="google-card">
+            <legend>Google (Calendar, Gmail, Drive)</legend>
+            <p class="muted">Uses your own Google OAuth client. In <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud Console</a>, enable the Calendar, Gmail and Drive APIs, create an OAuth client of type <b>Web application</b>, and add this redirect URI:</p>
+            <div class="copy-row"><code id="google-redirect"></code><button type="button" class="btn small" id="google-copy">Copy</button></div>
+            <label class="field">
+              <span>Client ID</span>
+              <input name="google.clientId" placeholder="….apps.googleusercontent.com">
+            </label>
+            <label class="field">
+              <span>Client secret <small class="key-state" id="google-secret-state"></small></span>
+              <input type="password" name="google.clientSecret" placeholder="GOCSPX-…">
+            </label>
+            <div class="checks">
+              <label class="check"><input type="checkbox" name="google.calendar"> Calendar (read, and add events without emailing guests)</label>
+              <label class="check"><input type="checkbox" name="google.gmail"> Gmail (search, read, and create drafts; never sends)</label>
+              <label class="check"><input type="checkbox" name="google.drive"> Drive (search and read files)</label>
+            </div>
+            <div class="card-actions">
+              <button type="button" class="btn primary" id="google-connect">Connect Google</button>
+              <button type="button" class="btn ghost danger" id="google-disconnect" hidden>Disconnect</button>
+              <span class="test-result" id="google-status"></span>
+            </div>
+          </fieldset>
+
+          <fieldset class="card">
+            <legend>Other calendars (ICS)</legend>
+            <p class="muted">Paste read-only calendar feed URLs, one per line, optionally named as <code>Name | URL</code>. Outlook, iCloud, Fastmail and Google all offer an ICS link.</p>
+            <label class="field">
+              <span>Feeds</span>
+              <textarea name="calendars.icsFeeds" rows="3" placeholder="Work | https://outlook.office365.com/owa/calendar/…/calendar.ics"></textarea>
+            </label>
+          </fieldset>
+
+          <fieldset class="card">
+            <legend>Tools and skills</legend>
+            <label class="check"><input type="checkbox" name="tools.enabled"> Let models use connected tools</label>
+            <p class="muted small" id="tools-summary"></p>
+          </fieldset>
+
+          <fieldset class="card">
+            <legend>Files</legend>
+            <label class="field">
+              <span>Markdown folder</span>
+              <input name="files.root" placeholder="Defaults to the Claude Code working directory">
+            </label>
+          </fieldset>
+
           <div class="settings-actions">
             <button class="btn primary" type="submit">Save settings</button>
             <span id="save-result" class="muted"></span>
@@ -169,5 +281,14 @@
       </section>
     </main>
   </div>
+
+  <dialog id="modal" class="modal">
+    <form method="dialog" class="modal-head">
+      <h2 id="modal-title"></h2>
+      <button class="btn ghost icon" value="close" aria-label="Close">✕</button>
+    </form>
+    <div class="modal-sub muted small" id="modal-sub"></div>
+    <div class="modal-body md-view" id="modal-body"></div>
+  </dialog>
 </body>
 </html>

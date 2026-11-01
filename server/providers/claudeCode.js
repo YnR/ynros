@@ -133,6 +133,8 @@ export async function* stream({ settings, messages, model, signal, conversation,
   const skillEvent = (sk) => ({ type: 'skill', id: sk.id, name: sk.name, args: sk.args, text: sk.text ?? null });
 
   let sawPartialText = false;
+  let emittedText = false; // separate consecutive assistant messages with a blank line
+  let needBreak = false;
   let gotResult = false;
   const pendingFinal = [];
   try {
@@ -148,6 +150,10 @@ export async function* stream({ settings, messages, model, signal, conversation,
         }
         // Subagent lifecycle events (task_started / task_progress / task_updated / task_notification).
         if (!/^task_/.test(ev.subtype || '') || !ev.task_id) continue;
+        // Only agent tasks are subagents; background shell commands also report as tasks.
+        const isAgent = ev.task_type === 'local_agent' || ev.subagent_type
+          || (ev.tool_use_id && subagents.has(ev.tool_use_id)) || taskToTool.has(ev.task_id);
+        if (!isAgent) continue;
         if (ev.tool_use_id) taskToTool.set(ev.task_id, ev.tool_use_id);
         const id = ev.tool_use_id || taskToTool.get(ev.task_id) || ev.task_id;
         if (ev.subtype === 'task_started') {
@@ -174,8 +180,12 @@ export async function* stream({ settings, messages, model, signal, conversation,
         }
       } else if (ev.type === 'stream_event') {
         const e = ev.event;
-        if (e?.type === 'content_block_delta' && e.delta?.type === 'text_delta' && !ev.parent_tool_use_id) {
+        if (ev.parent_tool_use_id) continue;
+        if (e?.type === 'message_start' && emittedText) needBreak = true;
+        if (e?.type === 'content_block_delta' && e.delta?.type === 'text_delta') {
           sawPartialText = true;
+          if (needBreak) { yield { type: 'text', text: '\n\n' }; needBreak = false; }
+          emittedText = true;
           yield { type: 'text', text: e.delta.text };
         }
       } else if (ev.type === 'assistant') {
@@ -190,7 +200,12 @@ export async function* stream({ settings, messages, model, signal, conversation,
           continue;
         }
         for (const block of ev.message?.content || []) {
-          if (block.type === 'text' && !sawPartialText) yield { type: 'text', text: block.text };
+          if (block.type === 'text' && !sawPartialText) {
+            if (emittedText) yield { type: 'text', text: '\n\n' };
+            emittedText = true;
+            needBreak = false;
+            yield { type: 'text', text: block.text };
+          }
           if (block.type !== 'tool_use') continue;
           if (SUBAGENT_TOOLS.has(block.name)) {
             yield subagentEvent(block.id, {

@@ -119,7 +119,7 @@ async function drainQueue(conv, run) {
     ? items[0].text
     : `While you were working I sent these additional instructions. Handle them together:\n\n${
       items.map((q, i) => `${i + 1}. ${q.text}`).join('\n\n')}`;
-  await beginTurn(conv, text, { batch: items.map((q) => q.text) });
+  await beginTurn(conv, text, { batch: items.length > 1 ? items.map((q) => q.text) : undefined });
 }
 
 function queueEvent(conv) {
