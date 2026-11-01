@@ -11,6 +11,8 @@ import * as projects from './projects.js';
 import * as quota from './quota.js';
 import * as mcp from './mcp/registry.js';
 import { route as routeModel, tiersFor } from './router.js';
+import { today, BRIEF_PROMPT } from './today.js';
+import * as approvals from './approvals.js';
 import * as tools from './tools.js';
 import * as google from './integrations/google.js';
 import * as skillsLib from './integrations/skills.js';
@@ -385,11 +387,39 @@ async function route(req, res) {
 
   if (parts[1] === 'events' && parts.length === 2 && method === 'GET') return handleEvents(req, res);
 
+  if (parts[1] === 'today' && parts.length === 2 && method === 'GET') {
+    return sendJson(res, 200, await today(await loadSettings()));
+  }
+  if (parts[1] === 'today' && parts[2] === 'brief' && method === 'POST') {
+    await readJson(req);
+    const settings = await loadSettings();
+    const provider = settings.defaultProvider;
+    const model = settings.routing?.enabled !== false ? 'auto' : settings[provider]?.model || '';
+    const conv = await store.createConversation({ provider, model, title: `Brief · ${new Date().toLocaleDateString()}` });
+    await beginTurn(conv, BRIEF_PROMPT, {});
+    conv.title = `Brief · ${new Date().toLocaleDateString()}`;
+    await store.saveConversation(conv);
+    return sendJson(res, 201, { id: conv.id });
+  }
+
   if (parts[1] === 'quota' && parts.length === 2 && method === 'GET') {
     const settings = await loadSettings();
     const out = {};
     for (const p of PROVIDERS) out[p] = { ...(await quota.status(settings, p)), alternatives: await quota.alternatives(settings, p) };
     return sendJson(res, 200, out);
+  }
+
+  if (parts[1] === 'approvals' && parts[2] === 'request' && method === 'POST') {
+    // Called by the MCP bridge for a Claude Code permission prompt; waits for the user.
+    const token = String(req.headers['x-harness-token'] || '');
+    if (token.length !== local.token.length || !crypto.timingSafeEqual(Buffer.from(token), Buffer.from(local.token))) throw new HttpError(401, 'Missing tool token');
+    const body = await readJson(req);
+    const allow = await approvals.request(body.conversationId, body.tool, body.input);
+    return sendJson(res, 200, { allow });
+  }
+  if (parts[1] === 'approvals' && parts.length === 3 && method === 'POST') {
+    const body = await readJson(req);
+    return sendJson(res, 200, { ok: approvals.answer(parts[2], body.allow === true) });
   }
 
   if (parts[1] === 'tools') {
@@ -486,6 +516,15 @@ async function route(req, res) {
     if (parts.length === 4 && parts[3] === 'tools' && method === 'GET') {
       return sendJson(res, 200, await mcp.serverTools(parts[2], { refresh: true }));
     }
+    if (parts[2] === 'preset' && parts.length === 4 && method === 'POST') {
+      await readJson(req);
+      return sendJson(res, 201, await mcp.addPreset(parts[3]));
+    }
+    if (parts[2] === 'presets' && method === 'GET') return sendJson(res, 200, mcp.PRESETS);
+    if (parts.length === 4 && parts[3] === 'confirm' && method === 'POST') {
+      await mcp.setConfirm(parts[2], (await readJson(req)).confirm);
+      return sendJson(res, 200, { ok: true });
+    }
     if (parts.length === 4 && parts[3] === 'enabled' && method === 'POST') {
       await mcp.setEnabled(parts[2], (await readJson(req)).enabled);
       return sendJson(res, 200, { ok: true });
@@ -569,7 +608,7 @@ async function route(req, res) {
       if (method === 'GET') {
         const c = runs.getRun(id)?.conv || await store.getConversation(id);
         if (!c) return sendJson(res, 404, { error: 'Not found' });
-        return sendJson(res, 200, { ...c, running: Boolean(runs.getRun(id)) });
+        return sendJson(res, 200, { ...c, running: Boolean(runs.getRun(id)), approvals: approvals.list(id) });
       }
       if (method === 'PATCH') {
         const c = runs.getRun(id)?.conv || await store.getConversation(id);

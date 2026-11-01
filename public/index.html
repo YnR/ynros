@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Harness</title>
   <link rel="icon" href="data:,">
+  <script src="/theme-init.js"></script>
   <link rel="stylesheet" href="/styles.css">
   <script type="module" src="/app.js"></script>
 </head>
@@ -12,8 +13,13 @@
   <div class="app">
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-head">
+        <button class="btn ghost icon" id="collapse-sidebar" type="button" title="Hide sidebar" aria-label="Hide sidebar">⟨</button>
         <span class="brand">Harness</span>
-        <button class="btn primary" id="new-chat" title="New chat">+ New</button>
+        <button class="btn primary small" id="new-chat" title="New chat">+ Chat</button>
+      </div>
+      <div class="project-bar">
+        <span class="muted small">Projects</span>
+        <button class="btn ghost small" id="project-new" type="button" title="New project">+ Project</button>
       </div>
       <nav class="conv-list" id="conv-list" aria-label="Conversations"></nav>
       <a class="nav-link" href="#/files" id="files-link">📝 Files</a>
@@ -25,6 +31,7 @@
         <header class="chat-head">
           <button class="btn ghost icon" id="toggle-sidebar" aria-label="Toggle sidebar">☰</button>
           <h1 id="chat-title">New chat</h1>
+          <span class="project-badge" id="chat-project" hidden></span>
           <button class="btn ghost small" id="rename-chat" hidden>Rename</button>
           <button class="btn ghost small danger" id="delete-chat" hidden>Delete</button>
         </header>
@@ -41,6 +48,7 @@
           </div>
         </div>
         <form class="composer" id="composer">
+          <div id="banners"></div>
           <div class="queue" id="queue" hidden></div>
           <div class="composer-controls">
             <select id="provider-select" aria-label="Provider">
@@ -53,7 +61,11 @@
             <span class="status-dot" id="provider-status" title=""></span>
           </div>
           <div class="composer-row">
-            <textarea id="input" rows="1" placeholder="Message… (Enter to send, Shift+Enter for a new line)"></textarea>
+            <button class="btn ghost icon" id="attach" type="button" title="Mention a file (or type @)" aria-label="Mention a file">📎</button>
+            <div class="input-wrap">
+              <textarea id="input" rows="1" placeholder="Message… (Enter to send, Shift+Enter for a new line)"></textarea>
+              <div class="mention-pop" id="mention-pop" role="listbox" hidden></div>
+            </div>
             <button class="btn primary" id="send" type="submit">Send</button>
             <span class="running-label" id="running-label" hidden>Working…</span>
             <button class="btn" id="stop" type="button" hidden>Stop</button>
@@ -94,6 +106,16 @@
         </header>
         <form class="settings" id="settings-form" autocomplete="off">
           <p class="muted">Settings and keys are saved on this computer only, in <code id="data-dir">~/.ynros-harness</code>. Keys are never sent back to the browser.</p>
+
+          <fieldset class="card">
+            <legend>Appearance</legend>
+            <div class="seg" id="theme-seg" role="radiogroup" aria-label="Theme">
+              <button type="button" data-theme-choice="system">System</button>
+              <button type="button" data-theme-choice="light">Light</button>
+              <button type="button" data-theme-choice="dark">Dark</button>
+            </div>
+            <input type="hidden" name="appearance.theme">
+          </fieldset>
 
           <label class="field">
             <span>Default provider for new chats</span>
@@ -242,6 +264,7 @@
               <label class="check"><input type="checkbox" name="google.calendar"> Calendar (read, and add events without emailing guests)</label>
               <label class="check"><input type="checkbox" name="google.gmail"> Gmail (search, read, and create drafts; never sends)</label>
               <label class="check"><input type="checkbox" name="google.drive"> Drive (search and read files)</label>
+              <label class="check"><input type="checkbox" name="google.contacts"> Contacts (look people up)</label>
             </div>
             <div class="card-actions">
               <button type="button" class="btn primary" id="google-connect">Connect Google</button>
@@ -256,6 +279,90 @@
             <label class="field">
               <span>Feeds</span>
               <textarea name="calendars.icsFeeds" rows="3" placeholder="Work | https://outlook.office365.com/owa/calendar/…/calendar.ics"></textarea>
+            </label>
+          </fieldset>
+
+          <fieldset class="card">
+            <legend>People</legend>
+            <p class="muted">Models can look people up in Google Contacts (above) and in vCard files, and keep notes about people in a local notebook.</p>
+            <label class="field">
+              <span>vCard sources</span>
+              <textarea name="contacts.vcardSources" rows="2" placeholder="~/Contacts/export.vcf&#10;https://example.com/contacts.vcf"></textarea>
+              <small class="muted">One .vcf file path or URL per line (export from iCloud, Outlook, your phone…).</small>
+            </label>
+            <label class="check"><input type="checkbox" name="contacts.notebook"> Let models save notes about people</label>
+          </fieldset>
+
+          <fieldset class="card" id="mcp-card">
+            <legend>MCP servers</legend>
+            <p class="muted">Servers added here work with every provider: Claude Code gets them directly, and the API models call them through the harness.</p>
+            <div id="mcp-list" class="mcp-list"></div>
+            <details class="sub">
+              <summary>Add a server by hand</summary>
+              <div class="sub-body">
+                <label class="field"><span>Name</span><input id="mcp-name" placeholder="e.g. github"></label>
+                <label class="field"><span>Command (stdio) or URL (HTTP)</span><input id="mcp-target" placeholder="npx -y @modelcontextprotocol/server-filesystem ~/Documents   or   https://example.com/mcp"></label>
+                <label class="field"><span>Environment variables or headers</span><textarea id="mcp-env" rows="2" placeholder="KEY=value (env for commands)&#10;Authorization: Bearer … (headers for URLs)"></textarea></label>
+                <div class="card-actions"><button type="button" class="btn" id="mcp-add">Add server</button><span class="test-result" id="mcp-add-result"></span></div>
+              </div>
+            </details>
+            <details class="sub" id="mcp-claude">
+              <summary>Claude Code plugin marketplace</summary>
+              <div class="sub-body">
+                <p class="muted small">Plugins install into Claude Code. Any MCP servers they include are also added here for the API models.</p>
+                <div class="card-actions">
+                  <input id="mcp-filter" placeholder="Filter plugins…">
+                  <button type="button" class="btn small" id="mcp-claude-load">Load plugins</button>
+                </div>
+                <div class="card-actions">
+                  <input id="mcp-market-source" placeholder="Add a marketplace: owner/repo or URL">
+                  <button type="button" class="btn small" id="mcp-market-add">Add marketplace</button>
+                </div>
+                <div id="mcp-claude-list" class="plugin-list"></div>
+              </div>
+            </details>
+            <details class="sub">
+              <summary>Gemini CLI extensions</summary>
+              <div class="sub-body">
+                <p class="muted small">Paste an extension's GitHub URL from the <a href="https://geminicli.com/extensions/" target="_blank" rel="noopener">Gemini CLI extensions gallery</a>. Its MCP servers are imported from <code>gemini-extension.json</code>.</p>
+                <div class="card-actions">
+                  <input id="gemini-ext-url" placeholder="https://github.com/owner/extension">
+                  <button type="button" class="btn small" id="gemini-ext-add">Import</button>
+                </div>
+                <span class="test-result" id="gemini-ext-result"></span>
+              </div>
+            </details>
+          </fieldset>
+
+          <fieldset class="card">
+            <legend>Model routing</legend>
+            <p class="muted">Pick <b>auto</b> as the model and a small model chooses small, medium or large for each message. A chat moves up when a task needs it and stays there, so the prompt cache keeps working.</p>
+            <label class="check"><input type="checkbox" name="routing.enabled"> Route "auto" chats with a small model</label>
+            <label class="check"><input type="checkbox" name="routing.suggestNewChat"> Suggest a fresh chat when a message starts a new topic</label>
+          </fieldset>
+
+          <fieldset class="card">
+            <legend>Usage limits</legend>
+            <p class="muted">When a provider runs out, work waits for the reset and the chat offers to switch to another provider. Queued and resumed work stops early to keep a reserve for your new instructions.</p>
+            <label class="field"><span>Reserve for new instructions (%)</span><input type="number" min="0" max="50" name="quota.reservePercent"></label>
+            <p class="muted small">Optional token budgets for API keys (0 = rely on the provider's own limits):</p>
+            <div class="grid3">
+              <label class="field"><span>Claude API tokens</span><input type="number" min="0" data-quota="anthropic.budget"></label>
+              <label class="field"><span>per hours</span><input type="number" min="1" data-quota="anthropic.windowHours"></label>
+              <span></span>
+              <label class="field"><span>Gemini tokens</span><input type="number" min="0" data-quota="gemini.budget"></label>
+              <label class="field"><span>per hours</span><input type="number" min="1" data-quota="gemini.windowHours"></label>
+              <span></span>
+            </div>
+            <p class="muted small" id="quota-summary"></p>
+          </fieldset>
+
+          <fieldset class="card">
+            <legend>Projects</legend>
+            <label class="field">
+              <span>Default folder for new projects</span>
+              <input name="projects.hostFolder" placeholder="~/Harness Projects">
+              <small class="muted">Each project is a folder with a <code>CLAUDE.md</code> for instructions and an <code>outputs/</code> folder.</small>
             </label>
           </fieldset>
 
@@ -281,6 +388,27 @@
       </section>
     </main>
   </div>
+
+  <dialog id="project-dialog" class="modal">
+    <form method="dialog" class="modal-head"><h2>New project</h2><button class="btn ghost icon" value="close" aria-label="Close">✕</button></form>
+    <form class="modal-body settings-like" id="project-form">
+      <label class="field"><span>Name</span><input name="name" placeholder="e.g. Kitchen renovation" required></label>
+      <p class="muted small" id="project-host"></p>
+      <details class="sub"><summary>Use an existing folder instead</summary>
+        <label class="field"><span>Folder path</span><input name="existingPath" placeholder="/path/to/folder"></label>
+      </details>
+      <div class="card-actions"><button class="btn primary" type="submit">Create project</button><span class="test-result" id="project-result"></span></div>
+    </form>
+  </dialog>
+
+  <dialog id="picker" class="modal">
+    <form method="dialog" class="modal-head"><h2>Mention a file</h2><button class="btn ghost icon" value="close" aria-label="Close">✕</button></form>
+    <div class="modal-body">
+      <input id="picker-filter" placeholder="Search files and folders…" autocomplete="off">
+      <div class="muted small" id="picker-root"></div>
+      <div id="picker-list" class="picker-list"></div>
+    </div>
+  </dialog>
 
   <dialog id="modal" class="modal">
     <form method="dialog" class="modal-head">

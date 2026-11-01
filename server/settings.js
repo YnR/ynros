@@ -7,7 +7,7 @@ const SETTINGS_FILE = () => path.join(DATA_DIR, 'settings.json');
 
 export const PROVIDERS = ['anthropic', 'gemini', 'claudeCode'];
 // Every settings section the settings page may update.
-const SECTIONS = [...PROVIDERS, 'notifications', 'google', 'calendars', 'tools', 'triage', 'files', 'projects', 'contacts', 'quota', 'routing'];
+const SECTIONS = [...PROVIDERS, 'notifications', 'google', 'calendars', 'tools', 'triage', 'files', 'projects', 'contacts', 'quota', 'routing', 'appearance', 'sources'];
 // Values that are write-only: stored, but never sent back to the browser.
 const SECRETS = { anthropic: ['apiKey'], gemini: ['apiKey'], google: ['clientSecret'] };
 
@@ -32,6 +32,20 @@ export function defaultSettings() {
       permissionMode: '',
       allowedTools: '',
       systemPrompt: '',
+      // Show Claude Code's permission prompts in the chat (Allow / Deny) instead of denying them.
+      askInChat: true,
+      // Claude in Chrome: let Claude Code act in your Chrome browser (--chrome).
+      chrome: false,
+    },
+    sources: {
+      // Feeds for the Today view, one per line: "Name | https://…/feed.xml" or just the URL.
+      feeds: '',
+      // News topics (comma or line separated), fetched from Google News.
+      newsTopics: '',
+      newsRegion: 'en-US:US',
+    },
+    appearance: {
+      theme: 'system', // system | light | dark
     },
     notifications: {
       enabled: true,

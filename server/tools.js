@@ -4,6 +4,8 @@ import * as skills from './integrations/skills.js';
 import * as files from './files.js';
 import * as contacts from './integrations/contacts.js';
 import * as mcp from './mcp/registry.js';
+import * as approvals from './approvals.js';
+import * as feeds from './integrations/feeds.js';
 import fsp from 'node:fs/promises';
 import pathMod from 'node:path';
 
@@ -277,6 +279,15 @@ export const TOOLS = [
     },
   },
   {
+    name: 'read_sources',
+    group: 'sources',
+    description: 'Read recent items from the user\'s chosen sources: their RSS/Atom feeds and news topics. Use for briefs and "what\'s new" questions.',
+    schema: obj({ since_hours: { type: 'integer', description: 'How far back to look. Default 36.' } }),
+    async run(args, { settings }) {
+      return feeds.recentItems(settings, { sinceHours: Number(args.since_hours) || 36 });
+    },
+  },
+  {
     name: 'find_people',
     group: 'people',
     description: 'Look up people in the user\'s contacts (Google Contacts, vCard files) and in the people notebook. Returns names, emails, phones, organization and saved notes. Use it to resolve "who is X" or to find an email address before drafting mail or invites.',
@@ -359,6 +370,7 @@ export async function availableTools(settings, { forClaudeCode = false, project 
   const skillList = forClaudeCode ? [] : await skills.listSkills(settings);
   const tools = TOOLS.filter((t) => {
     if (t.group === 'skills') return !forClaudeCode && skillList.length > 0; // Claude Code has its own skills
+    if (t.group === 'sources') return feeds.parseSources(settings).length > 0;
     if (t.group === 'people') {
       const anySource = (googleStatus.contacts && settings.google.contacts) || contacts.parseSources(settings.contacts?.vcardSources).length;
       return t.name === 'remember_about_person' ? settings.contacts?.notebook !== false : Boolean(anySource) || settings.contacts?.notebook !== false;
@@ -376,10 +388,15 @@ export async function availableTools(settings, { forClaudeCode = false, project 
   return { tools, skills: skillList, googleStatus };
 }
 
-export async function runTool(name, args, settings, { project = null } = {}) {
+export async function runTool(name, args, settings, { project = null, conversationId = null } = {}) {
   if (name.startsWith('mcp__')) {
     const t = (await mcp.apiTools()).find((x) => x.name === name);
     if (!t) throw new Error(`Unknown MCP tool ${name}`);
+    // Servers marked "confirm" (like a browser) ask before any action.
+    if (t.confirm && conversationId && !approvals.looksReadOnly(t.mcp.tool)) {
+      const ok = await approvals.request(conversationId, `${t.mcp.server}: ${t.mcp.tool}`, args);
+      if (!ok) throw new Error('The user denied this action.');
+    }
     return mcp.callTool(t.mcp.server, t.mcp.tool, args);
   }
   const tool = TOOLS.find((t) => t.name === name);

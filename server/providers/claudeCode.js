@@ -19,6 +19,11 @@ export function buildArgs({ settings, model, sessionId, mcpConfig }) {
   if (m) args.push('--model', m);
   if (sessionId) args.push('--resume', sessionId);
   if (cfg.permissionMode) args.push('--permission-mode', cfg.permissionMode);
+  if (cfg.chrome) args.push('--chrome');
+  if (cfg.askInChat !== false && mcpConfig?.mcpServers?.harness) {
+    // Permission prompts go to the harness, which asks you in the chat.
+    args.push('--permission-prompt-tool', 'mcp__harness__approve');
+  }
   const tools = splitList(cfg.allowedTools);
   if (mcpConfig) {
     args.push('--mcp-config', JSON.stringify(mcpConfig));

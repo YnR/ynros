@@ -45,10 +45,10 @@ function normalize(cfg) {
   return out;
 }
 
-export async function addServer(name, config, { source = 'manual', enabled = true } = {}) {
+export async function addServer(name, config, { source = 'manual', enabled = true, confirm = false } = {}) {
   if (!validName(name)) throw Object.assign(new Error('Use letters, numbers, - and _ for the server name'), { status: 400 });
   const reg = await loadRegistry();
-  reg.servers[name] = { ...normalize(config), source, enabled };
+  reg.servers[name] = { ...normalize(config), source, enabled, confirm: Boolean(confirm || config.confirm) };
   await saveRegistry(reg);
   reset(name);
   return reg.servers[name];
@@ -59,6 +59,30 @@ export async function removeServer(name) {
   delete reg.servers[name];
   await saveRegistry(reg);
   reset(name);
+}
+
+/** One-click presets. */
+export const PRESETS = {
+  chrome: {
+    name: 'chrome',
+    label: 'Chrome (DevTools MCP)',
+    config: { command: 'npx', args: ['-y', 'chrome-devtools-mcp@latest'] },
+    confirm: true,
+    note: 'Controls a Chrome window: open pages, click, fill forms, read content. Every action asks you first.',
+  },
+};
+
+export async function addPreset(id) {
+  const p = PRESETS[id];
+  if (!p) throw Object.assign(new Error('Unknown preset'), { status: 404 });
+  return addServer(p.name, p.config, { source: `preset:${id}`, confirm: p.confirm });
+}
+
+export async function setConfirm(name, confirm) {
+  const reg = await loadRegistry();
+  if (!reg.servers[name]) throw Object.assign(new Error('No such server'), { status: 404 });
+  reg.servers[name].confirm = Boolean(confirm);
+  await saveRegistry(reg);
 }
 
 export async function setEnabled(name, enabled) {
@@ -120,6 +144,7 @@ export async function apiTools() {
         description: `[${name}] ${t.description || t.name}`.slice(0, 1024),
         schema: t.inputSchema && t.inputSchema.type === 'object' ? t.inputSchema : { type: 'object', properties: {} },
         mcp: { server: name, tool: t.name },
+        confirm: Boolean(reg.servers[name].confirm),
       });
     }
   }));

@@ -348,3 +348,17 @@ test('auto model: routes per message, stays sticky, and suggests a fresh chat fo
   assert.equal(old.messages.length, 6);
   assert.equal(old.suggestNewChat, null);
 });
+
+test('today: lists chats needing attention and starts a brief', async () => {
+  const t = await (await fetch(`${base}/api/today`)).json();
+  assert.ok(Array.isArray(t.attention));
+  assert.ok(Array.isArray(t.recent));
+  assert.equal(t.mail, null, 'no Gmail without Google');
+  const r = await (await fetch(`${base}/api/today/brief`, json('POST', {}))).json();
+  const c = await waitFor(async () => {
+    const x = await (await fetch(`${base}/api/conversations/${r.id}`)).json();
+    return !x.running && x.messages.length === 2 && x;
+  });
+  assert.match(c.title, /^Brief/);
+  assert.match(c.messages[0].content, /brief for today/);
+});

@@ -19,14 +19,19 @@ async function runOptions(settings, providerName, conv) {
   const { tools, skills } = await availableTools(settings, { forClaudeCode: isCC, project });
   if (isCC) {
     const servers = await claudeCodeServers().catch(() => ({}));
-    if (tools.length && local.url) {
-      servers.harness = { command: process.execPath, args: [MCP_SERVER], env: { HARNESS_URL: local.url, HARNESS_TOKEN: local.token } };
+    // The harness bridge carries our tools and the in-chat permission prompt.
+    if ((tools.length || settings.claudeCode.askInChat !== false) && local.url) {
+      servers.harness = {
+        command: process.execPath,
+        args: [MCP_SERVER],
+        env: { HARNESS_URL: local.url, HARNESS_TOKEN: local.token, HARNESS_CONVERSATION: conv.id },
+      };
     }
     if (Object.keys(servers).length) out.mcpConfig = { mcpServers: servers };
     return out;
   }
   out.tools = tools;
-  out.runTool = (name, args) => runTool(name, args, settings, { project });
+  out.runTool = (name, args) => runTool(name, args, settings, { project, conversationId: conv.id });
   out.systemNote = toolSystemNote(skills, { project, instructions: await readInstructions(project) });
   return out;
 }

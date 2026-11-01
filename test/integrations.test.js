@@ -215,3 +215,22 @@ test('router: sticky tier choice and tolerant parsing', async () => {
   assert.deepEqual(parseRoute('sure {"tier":"large","related":false,"reason":"x"}'), { tier: 'large', related: false, reason: 'x' });
   assert.equal(parseRoute('garbage').tier, 'medium');
 });
+
+test('feeds: parses RSS and Atom, builds Google News topic feeds', async () => {
+  const feeds = await import('../server/integrations/feeds.js');
+  const rss = `<?xml version="1.0"?><rss><channel><title>UXR digest</title>
+    <item><title><![CDATA[Diary studies & you]]></title><link>https://ex.com/a</link><pubDate>Sun, 01 Nov 2026 08:00:00 GMT</pubDate><description>&lt;p&gt;Hello &amp; welcome&lt;/p&gt;</description></item>
+  </channel></rss>`;
+  const r = feeds.parseFeed(rss);
+  assert.equal(r.title, 'UXR digest');
+  assert.deepEqual(r.items[0], { title: 'Diary studies & you', link: 'https://ex.com/a', date: '2026-11-01T08:00:00.000Z', summary: 'Hello & welcome', source: undefined });
+  const atom = '<feed xmlns="http://www.w3.org/2005/Atom"><title>A</title><entry><title>E1</title><link rel="alternate" href="https://ex.com/e1"/><updated>2026-11-01T10:00:00Z</updated><summary>S</summary></entry></feed>';
+  assert.equal(feeds.parseFeed(atom).items[0].link, 'https://ex.com/e1');
+  const s = defaultSettings();
+  s.sources.feeds = 'UXR | https://ex.com/uxr.xml';
+  s.sources.newsTopics = 'AI research, design';
+  const srcs = feeds.parseSources(s);
+  assert.equal(srcs.length, 3);
+  assert.equal(srcs[0].name, 'UXR');
+  assert.match(srcs[1].url, /^https:\/\/news\.google\.com\/rss\/search\?q=AI\+research\+when%3A2d/);
+});
