@@ -101,7 +101,7 @@ function renderList() {
   renderTabs();
   updateBadge();
   renderSidebar($('#conv-list'), {
-    perGroup: state.settings?.projects?.chatsPerGroup || 5,
+    perGroup: state.settings?.projects?.chatsPerGroup || 3,
     onSolo: (href) => openSolo(href),
     projects: state.projects,
     conversations: state.conversations,

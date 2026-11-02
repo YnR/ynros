@@ -90,7 +90,7 @@ export function defaultSettings() {
       hostFolder: '',
       lastProjectId: '',
       // Chats shown per project in the sidebar before "Show more".
-      chatsPerGroup: 5,
+      chatsPerGroup: 3,
     },
     permissions: {
       // Allow non-destructive git commands (status, diff, log, add, commit…) without asking.
