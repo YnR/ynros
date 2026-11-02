@@ -86,9 +86,19 @@ export function defaultSettings() {
       enabled: true,
     },
     projects: {
-      // Where new projects are created. Empty = ~/Harness Projects.
+      // Where new projects are created and existing ones are found. Empty = ~/src.
       hostFolder: '',
       lastProjectId: '',
+      // Chats shown per project in the sidebar before "Show more".
+      chatsPerGroup: 5,
+    },
+    permissions: {
+      // Allow non-destructive git commands (status, diff, log, add, commit…) without asking.
+      safeGit: true,
+    },
+    desktop: {
+      // Desktop app: open at login.
+      openAtLogin: false,
     },
     routing: {
       // "Auto" model: a small model picks small / medium / large per message.

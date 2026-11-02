@@ -54,10 +54,20 @@ export function parseFeed(xml) {
       date: d && !Number.isNaN(d.getTime()) ? d.toISOString() : null,
       summary: strip(tag(block, isAtom ? 'summary' : 'description') || tag(block, 'content')).slice(0, 400),
       source: strip(tag(block, 'source')) || undefined,
+      // RSS <category>a</category> and Atom <category term="a"/> become topic tags.
+      ...(tagsOf(block) ? { tags: tagsOf(block) } : {}),
     });
   }
   const title = strip(tag(xml.split(/<(item|entry)[\s>]/i)[0], 'title'));
   return { title, items };
+}
+
+function tagsOf(block) {
+  const t = [...new Set([
+    ...[...block.matchAll(/<category[^>]*>([\s\S]*?)<\/category>/gi)].map((m) => strip(m[1])),
+    ...[...block.matchAll(/<category[^>]*term=["']([^"']+)["']/gi)].map((m) => decode(m[1])),
+  ].filter(Boolean))].slice(0, 8);
+  return t.length ? t : undefined;
 }
 
 /** Feed URLs advertised by an HTML page, then common locations. */

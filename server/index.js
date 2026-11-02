@@ -9,6 +9,8 @@ import { triage } from './triage.js';
 import * as files from './files.js';
 import * as projects from './projects.js';
 import * as history from './history.js';
+import * as news from './news.js';
+import { DATA_DIR } from './settings.js';
 import * as quota from './quota.js';
 import * as mcp from './mcp/registry.js';
 import { route as routeModel, tiersFor } from './router.js';
@@ -92,7 +94,7 @@ async function rootFor(settings, projectId) {
 }
 
 /** Add a user turn to the conversation and start a run for it. */
-async function beginTurn(conv, text, { provider: providerName, model, batch } = {}) {
+async function beginTurn(conv, text, { provider: providerName, model, batch, images } = {}) {
   const settings = await loadSettings();
   providerName ||= conv.provider || settings.defaultProvider;
   const provider = getProvider(providerName);
@@ -108,9 +110,10 @@ async function beginTurn(conv, text, { provider: providerName, model, batch } = 
   if (!conv.messages.length) conv.title = titleFrom(text);
   const msg = { role: 'user', content: text, ts: new Date().toISOString() };
   if (batch) msg.batch = batch;
+  if (images?.length) msg.images = images;
   // @mentions: API models get the file contents inline; Claude Code reads files itself.
   const root = await rootFor(settings, conv.projectId);
-  if (root && text.includes('@')) {
+  if (text.includes('@')) {
     try {
       if (providerName === 'claudeCode') {
         const found = await files.resolveMentions(root, text);
@@ -241,15 +244,59 @@ function queueEvent(conv) {
   runs.hub.emit('update', ev);
 }
 
+/** A new chat holding the history up to `index` (inclusive), in the same project. */
+async function branchConversation(c, index, { title } = {}) {
+  const upto = Math.max(-1, Math.min(index, c.messages.length - 1));
+  const b = await store.createConversation({ provider: c.provider, model: c.model, projectId: c.projectId, title: title || `${c.title} (branch)` });
+  b.messages = c.messages.slice(0, upto + 1).map((m) => ({ ...m }));
+  b.branchedFrom = { id: c.id, index: upto, title: c.title };
+  b.cwd = c.cwd || null;
+  // At the latest turn a Claude Code session can be forked as is; earlier turns go in the prompt.
+  if (c.claudeCodeSessionId && upto >= c.messages.length - 1) { b.claudeCodeSessionId = c.claudeCodeSessionId; b.forkSession = true; }
+  b.readAt = new Date().toISOString();
+  await store.saveConversation(b);
+  return b;
+}
+
+const UPLOADS = () => path.join(DATA_DIR, 'uploads');
+
+async function saveUpload({ name, data, text }) {
+  const safe = String(name || 'pasted').replace(/[^\w.-]+/g, '_').slice(-80) || 'pasted';
+  const file = path.join(UPLOADS(), `${new Date().toISOString().slice(0, 10)}-${crypto.randomBytes(4).toString('hex')}-${safe}`);
+  await fs.mkdir(UPLOADS(), { recursive: true, mode: 0o700 });
+  if (typeof data === 'string') await fs.writeFile(file, Buffer.from(data, 'base64'), { mode: 0o600 });
+  else if (typeof text === 'string') await fs.writeFile(file, text, { mode: 0o600 });
+  else throw new HttpError(400, 'Nothing to save');
+  return { path: file, name: safe };
+}
+
+/** Only files saved through /api/uploads can be attached as images. */
+async function uploadedPaths(list) {
+  if (!Array.isArray(list)) return [];
+  const root = path.resolve(UPLOADS()) + path.sep;
+  return list.filter((p) => typeof p === 'string' && path.resolve(p).startsWith(root)).slice(0, 10);
+}
+
 let lastHistoryImport = null;
+let historyTimer = null;
 function broadcastHistory(report) {
   if (report.added || report.updated) runs.hub.emit('update', { type: 'history', report });
 }
 
 /** Imports past Claude Code and Gemini CLI chats in the background (Settings → History). */
 export async function importHistoryOnStart() {
+  store.pruneEmpty().catch(() => {});
   const settings = await loadSettings();
   if (settings.history?.autoImport === false) return null;
+  // Keep terminal sessions in sync while the app runs (R1.12): look again every 90 seconds.
+  if (!historyTimer) {
+    historyTimer = setInterval(async () => {
+      const s = await loadSettings();
+      if (s.history?.autoImport === false) return;
+      try { const r = await history.importLocal(s); if (r.added || r.updated) { lastHistoryImport = r; broadcastHistory(r); } } catch { /* next time */ }
+    }, 90_000);
+    historyTimer.unref?.();
+  }
   try {
     lastHistoryImport = await history.importLocal(settings);
     broadcastHistory(lastHistoryImport);
@@ -286,11 +333,22 @@ let queueSeq = 0;
 
 async function handleChat(req, res, id) {
   const body = await readJson(req);
-  const text = String(body.text || '').trim();
+  const images = await uploadedPaths(body.images);
+  let text = String(body.text || '').trim();
+  if (!text && images.length) text = 'See the attached image.';
   if (!text) throw new HttpError(400, 'Message is empty');
   const active = runs.getRun(id);
   const conv = active?.conv || await store.getConversation(id);
   if (!conv) throw new HttpError(404, 'Conversation not found');
+
+  // /clear starts over: the model no longer sees earlier turns (they stay visible, dimmed).
+  if (text === '/clear' && !active) {
+    conv.messages.push({ role: 'system', kind: 'clear', ts: new Date().toISOString() });
+    conv.claudeCodeSessionId = null;
+    conv.context = null;
+    await store.saveConversation(conv);
+    return sendJson(res, 200, { cleared: true });
+  }
 
   if (!active) {
     const settings = await loadSettings();
@@ -317,14 +375,14 @@ async function handleChat(req, res, id) {
       : `Here are my instructions, including ones I sent while you were working. Handle them together:\n\n${
         all.map((t, i) => `${i + 1}. ${t}`).join('\n\n')}`;
     const run = await beginTurn(conv, combined, {
-      provider: body.provider, model: body.model, batch: all.length > 1 ? all : undefined,
+      provider: body.provider, model: body.model, batch: all.length > 1 ? all : undefined, images,
     });
     return sendJson(res, 202, { runId: run.id, conversation: { id: conv.id, title: conv.title } });
   }
 
   // The chat is busy: queue the message and ask a small model whether it
   // should interrupt. Only the user can approve an interrupt.
-  const item = { id: `q-${Date.now()}-${++queueSeq}`, text, ts: new Date().toISOString(), triage: { status: 'pending' } };
+  const item = { id: `q-${Date.now()}-${++queueSeq}`, text, ts: new Date().toISOString(), triage: { status: 'pending' }, ...(images.length ? { images } : {}) };
   conv.queue ||= [];
   conv.queue.push(item);
   await store.saveConversation(conv);
@@ -370,6 +428,19 @@ async function handleQueueAction(req, res, id, itemId, action) {
     await store.saveConversation(conv);
     queueEvent(conv);
     return sendJson(res, 200, { queue: conv.queue });
+  }
+  if (action === 'parallel' || action === 'new') {
+    // Start the queued message now: in a branch with this chat's context, or in a fresh chat.
+    const item = conv.queue.find((q) => q.id === itemId);
+    if (!item) throw new HttpError(404, 'Not in the queue');
+    conv.queue = conv.queue.filter((q) => q !== item);
+    await store.saveConversation(conv);
+    queueEvent(conv);
+    const fresh = action === 'parallel'
+      ? await branchConversation(conv, conv.messages.length - 1, { title: `${conv.title} (parallel)` })
+      : await store.createConversation({ provider: conv.provider, model: conv.model, projectId: conv.projectId });
+    await beginTurn(fresh, item.text, { images: item.images });
+    return sendJson(res, 201, { id: fresh.id });
   }
   if (action === 'send') {
     // "Interrupt now" on a running chat, or "Send now" on a paused or held queue.
@@ -448,6 +519,39 @@ async function route(req, res) {
     } catch (e) { throw new HttpError(400, e.message); }
   }
 
+  if (parts[1] === 'uploads' && parts.length === 2 && method === 'POST') {
+    // Pasted or picked files (images, text) are kept in the data folder and referenced by path.
+    const body = await readJson(req, 30_000_000);
+    return sendJson(res, 201, await saveUpload(body));
+  }
+  if (parts[1] === 'skills' && parts.length === 2 && method === 'GET') {
+    const settings = await loadSettings();
+    const pid = url.searchParams.get('project') || (await store.getConversation(url.searchParams.get('conversation') || '').catch(() => null))?.projectId;
+    const project = pid ? await projects.getProject(settings, pid) : null;
+    return sendJson(res, 200, await skillsLib.listCommands(settings, project));
+  }
+  if (parts[1] === 'projects' && parts[2] === 'why' && method === 'GET') {
+    return sendJson(res, 200, await projects.explain(await loadSettings(), url.searchParams.get('path')));
+  }
+  if (parts[1] === 'permissions') {
+    if (parts[2] === 'rules' && method === 'GET') return sendJson(res, 200, await approvals.readRules());
+    if (parts[2] === 'rules' && method === 'POST') {
+      const b = await readJson(req);
+      if (typeof b.rule !== 'string' || !b.rule.trim()) throw new HttpError(400, 'Missing rule');
+      return sendJson(res, 200, b.remove ? await approvals.removeRule(b.scope, b.rule) : await approvals.addRule(b.scope, b.rule.trim()));
+    }
+    if (parts[2] === 'suggestions' && method === 'GET') return sendJson(res, 200, await approvals.suggestions({ days: Number(url.searchParams.get('days')) || 14 }));
+  }
+  if (parts[1] === 'news') {
+    const settings = await loadSettings();
+    if (parts.length === 2 && method === 'GET') return sendJson(res, 200, await news.list(settings));
+    if (parts[2] === 'read' && method === 'POST') {
+      const b = await readJson(req);
+      const r = await news.markRead(Array.isArray(b.ids) ? b.ids : [], b.read !== false);
+      runs.hub.emit('update', { type: 'news', unread: r.unread });
+      return sendJson(res, 200, r);
+    }
+  }
   if (parts[1] === 'history') {
     const settings = await loadSettings();
     if (parts[2] === 'sources' && method === 'GET') {
@@ -494,12 +598,12 @@ async function route(req, res) {
     const token = String(req.headers['x-harness-token'] || '');
     if (token.length !== local.token.length || !crypto.timingSafeEqual(Buffer.from(token), Buffer.from(local.token))) throw new HttpError(401, 'Missing tool token');
     const body = await readJson(req);
-    const allow = await approvals.request(body.conversationId, body.tool, body.input);
+    const allow = await approvals.request(body.conversationId, body.tool, body.input, await loadSettings());
     return sendJson(res, 200, { allow });
   }
   if (parts[1] === 'approvals' && parts.length === 3 && method === 'POST') {
     const body = await readJson(req);
-    return sendJson(res, 200, { ok: approvals.answer(parts[2], body.allow === true) });
+    return sendJson(res, 200, { ok: approvals.answer(parts[2], body.allow === true, '', { always: body.always === true }) });
   }
 
   if (parts[1] === 'tools') {
@@ -620,9 +724,12 @@ async function route(req, res) {
     let pid = url.searchParams.get('project');
     const cid = url.searchParams.get('conversation');
     if (!pid && cid) pid = (await store.getConversation(cid))?.projectId;
+    const q = url.searchParams.get('q') || '';
+    // @~/Downloads/… or @/abs/path: browse anywhere on this computer.
+    if (/^(~|\/)/.test(q)) return sendJson(res, 200, await files.browsePath(q, { limit: 50 }));
     const root = await rootFor(settings, pid);
     if (!root) return sendJson(res, 200, { root: null, files: [] });
-    return sendJson(res, 200, await files.listAllFiles(root, { query: url.searchParams.get('q') || '', limit: Number(url.searchParams.get('limit')) || 50 }));
+    return sendJson(res, 200, await files.listAllFiles(root, { query: q, limit: Number(url.searchParams.get('limit')) || 50 }));
   }
 
   if (parts[1] === 'files') {
@@ -674,7 +781,9 @@ async function route(req, res) {
         const active = new Map(runs.activeSummary().map((r) => [r.conversationId, r]));
         const list = (await store.listConversations()).map((c) => {
           const r = active.get(c.id);
-          return r ? { ...c, running: true, subagentsRunning: r.subagents.filter((s) => s.status === 'running').length } : c;
+          const out = { ...c, needsYou: approvals.list(c.id).length > 0 };
+          out.unread = Boolean(out.lastReplyAt && (!out.readAt || out.lastReplyAt > out.readAt));
+          return r ? { ...out, running: true, subagentsRunning: r.subagents.filter((s) => s.status === 'running').length } : out;
         });
         return sendJson(res, 200, list);
       }
@@ -756,6 +865,22 @@ async function route(req, res) {
       if (!runs.getRun(id) && c.queue?.length) await drainQueue(c, null, { force: true });
       else queueEvent(c);
       return sendJson(res, 200, { provider: c.provider, model: c.model });
+    } else if (parts[3] === 'branch' && parts.length === 4 && method === 'POST') {
+      // Right-click a turn → "Branch from here": a new chat with the history up to that turn.
+      const body = await readJson(req);
+      const c = runs.getRun(id)?.conv || await store.getConversation(id);
+      if (!c) throw new HttpError(404, 'Not found');
+      const index = Number.isInteger(body.index) ? body.index : c.messages.length - 1;
+      const b = await branchConversation(c, index);
+      return sendJson(res, 201, { id: b.id });
+    } else if (parts[3] === 'read' && parts.length === 4 && method === 'POST') {
+      await readJson(req);
+      const c = runs.getRun(id)?.conv || await store.getConversation(id);
+      if (!c) throw new HttpError(404, 'Not found');
+      c.readAt = new Date().toISOString();
+      await store.saveConversation(c, { touch: false });
+      runs.hub.emit('update', { type: 'read', conversationId: id, readAt: c.readAt });
+      return sendJson(res, 200, { readAt: c.readAt });
     } else if (parts[3] === 'stop' && parts.length === 4 && method === 'POST') {
       return sendJson(res, 200, { stopped: runs.stopRun(id, 'user') });
     } else if (parts[3] === 'queue' && parts.length === 6 && method === 'POST') {

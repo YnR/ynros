@@ -1,4 +1,7 @@
 import { spawn as nodeSpawn } from 'node:child_process';
+import { transcriptPrefix } from '../convo.js';
+// Tools that create or change a file the user may want to open (an artifact).
+const ARTIFACT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 import readline from 'node:readline';
 
 // Aliases accepted by `claude --model`. Empty = the CLI's own default.
@@ -12,12 +15,14 @@ function splitList(s) {
   return String(s || '').split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
 }
 
-export function buildArgs({ settings, model, sessionId, mcpConfig }) {
+export function buildArgs({ settings, model, sessionId, mcpConfig, forkSession = false }) {
   const cfg = settings.claudeCode;
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
   const m = model ?? cfg.model;
   if (m) args.push('--model', m);
   if (sessionId) args.push('--resume', sessionId);
+  // A branch starts from the parent chat's session without changing it.
+  if (sessionId && forkSession) args.push('--fork-session');
   // Helper calls (triage, routing) leave no transcript behind in ~/.claude/projects.
   if (cfg.ephemeral) args.push('--no-session-persistence');
   if (cfg.permissionMode) args.push('--permission-mode', cfg.permissionMode);
@@ -97,8 +102,13 @@ function toolResultText(block) {
  */
 export async function* stream({ settings, messages, model, signal, conversation, spawnImpl = nodeSpawn, mcpConfig, cwd }) {
   const cfg = settings.claudeCode;
-  const prompt = [...messages].reverse().find((m) => m.role === 'user')?.content || '';
-  const args = buildArgs({ settings, model, sessionId: conversation?.claudeCodeSessionId, mcpConfig });
+  const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+  let prompt = lastUser?.content || '';
+  // Pasted images are files on disk; Claude Code reads them by path.
+  if (lastUser?.images?.length) prompt += `\n\nAttached images:\n${lastUser.images.map((p) => `@${p}`).join('\n')}`;
+  // No session to resume (a branch, or after switching provider): carry the context in the prompt.
+  if (!conversation?.claudeCodeSessionId && messages.length > 1) prompt = transcriptPrefix(messages) + prompt;
+  const args = buildArgs({ settings, model, sessionId: conversation?.claudeCodeSessionId, mcpConfig, forkSession: Boolean(conversation?.forkSession) });
 
   const child = spawnImpl(cfg.binaryPath || 'claude', args, {
     cwd: cwd || cfg.workingDirectory || undefined,
@@ -165,12 +175,31 @@ export async function* stream({ settings, messages, model, signal, conversation,
           yield { type: 'meta', sessionId: ev.session_id, model: ev.model };
           continue;
         }
+        if (ev.subtype === 'compact_boundary') {
+          const pre = ev.compact_metadata?.pre_tokens;
+          yield { type: 'notice', kind: 'compact', text: `Context was compacted${pre ? ` (from about ${Math.round(pre / 1000)}k tokens)` : ''}. Earlier turns are summarized for the model.` };
+          continue;
+        }
         // Subagent lifecycle events (task_started / task_progress / task_updated / task_notification).
         if (!/^task_/.test(ev.subtype || '') || !ev.task_id) continue;
         // Only agent tasks are subagents; background shell commands also report as tasks.
         const isAgent = ev.task_type === 'local_agent' || ev.subagent_type
           || (ev.tool_use_id && subagents.has(ev.tool_use_id)) || taskToTool.has(ev.task_id);
-        if (!isAgent) continue;
+        if (!isAgent) {
+          // Background shell commands and other tasks: shown in the chat with their progress.
+          const st = ev.subtype === 'task_started' ? 'running' : mapTaskStatus(ev.status || ev.patch?.status);
+          yield {
+            type: 'background',
+            id: ev.task_id,
+            taskType: ev.task_type || 'task',
+            description: ev.description || ev.command || undefined,
+            status: st || 'running',
+            ...(ev.subtype === 'task_started' ? { startedAt: now() } : {}),
+            ...(st && st !== 'running' ? { endedAt: now() } : {}),
+            ...(ev.summary ? { result: clip(ev.summary, 300) } : {}),
+          };
+          continue;
+        }
         if (ev.tool_use_id) taskToTool.set(ev.task_id, ev.tool_use_id);
         const id = ev.tool_use_id || taskToTool.get(ev.task_id) || ev.task_id;
         if (ev.subtype === 'task_started') {
@@ -198,6 +227,11 @@ export async function* stream({ settings, messages, model, signal, conversation,
       } else if (ev.type === 'stream_event') {
         const e = ev.event;
         if (ev.parent_tool_use_id) continue;
+        if (e?.type === 'message_start') {
+          const u = e.message?.usage || {};
+          const used = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+          if (used) yield { type: 'meta', context: used };
+        }
         if (e?.type === 'message_start' && emittedText) needBreak = true;
         if (e?.type === 'content_block_delta' && e.delta?.type === 'text_delta') {
           sawPartialText = true;
@@ -208,10 +242,13 @@ export async function* stream({ settings, messages, model, signal, conversation,
       } else if (ev.type === 'assistant') {
         const parent = ev.parent_tool_use_id;
         if (parent) {
-          // Activity inside a subagent: report what it is doing, not its text.
+          // Activity inside a subagent: report what it is doing, and keep a short log to open later.
           for (const block of ev.message?.content || []) {
             if (block.type === 'tool_use') {
-              yield subagentEvent(parent, { activity: `${block.name} ${summarize(block.input)}`.trim(), toolUse: true });
+              const line = `${block.name} ${summarize(block.input)}`.trim();
+              yield subagentEvent(parent, { activity: line, toolUse: true, log: { kind: 'tool', text: line } });
+            } else if (block.type === 'text' && block.text?.trim()) {
+              yield subagentEvent(parent, { log: { kind: 'text', text: clip(block.text, 2000) } });
             }
           }
           continue;
@@ -237,7 +274,8 @@ export async function* stream({ settings, messages, model, signal, conversation,
             skills.push(sk);
             yield skillEvent(sk);
           } else {
-            yield { type: 'tool', name: block.name, input: summarize(block.input) };
+            const file = ARTIFACT_TOOLS.has(block.name) ? block.input?.file_path || block.input?.notebook_path : null;
+            yield { type: 'tool', name: block.name, input: summarize(block.input), ...(file ? { path: file } : {}) };
           }
         }
         sawPartialText = false;

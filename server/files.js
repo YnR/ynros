@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 
 /**
  * Read and write Markdown/text files inside one root folder (the Claude Code
@@ -118,7 +119,12 @@ export async function resolveMentions(root, text) {
   for (const m of String(text).matchAll(MENTION)) {
     const rel = m[2].replace(/^"|"$/g, '').replace(/[.,;:!?)]+$/, '');
     try {
-      const { abs, rel: r } = await resolveInside(root, rel);
+      // @~/… and @/… point anywhere on this computer; other mentions are inside the project.
+      const outside = /^(~|\/)/.test(rel);
+      if (!outside && !root) continue;
+      const { abs, rel: r } = outside
+        ? { abs: path.resolve(rel.startsWith('~') ? path.join(os.homedir(), rel.slice(1)) : rel), rel }
+        : await resolveInside(root, rel);
       const st = await fs.stat(abs);
       if (st.isFile() || st.isDirectory()) found.push({ path: r, abs, dir: st.isDirectory(), size: st.size });
     } catch { /* not a file */ }
@@ -133,7 +139,7 @@ export async function expandMentions(root, text, { maxBytes = 100_000 } = {}) {
   const blocks = [];
   for (const f of mentions) {
     if (f.dir) {
-      const { files } = await listAllFiles(path.join(root, f.path), { limit: 200 });
+      const { files } = await listAllFiles(f.abs, { limit: 200 });
       blocks.push(`<attached_folder path="${f.path}">\n${files.map((x) => x.path + (x.dir ? '/' : '')).join('\n')}\n</attached_folder>`);
       continue;
     }
@@ -145,4 +151,28 @@ export async function expandMentions(root, text, { maxBytes = 100_000 } = {}) {
     blocks.push(`<attached_file path="${f.path}">\n${body}\n</attached_file>`);
   }
   return { content: `${text}\n\n${blocks.join('\n\n')}`, attachments: mentions.map((f) => f.path) };
+}
+
+/**
+ * Lists entries for an @-mention outside the project: "~/Downloads/re" lists
+ * ~/Downloads entries starting with "re". Folders end with "/".
+ */
+export async function browsePath(q, { limit = 50 } = {}) {
+  const home = os.homedir();
+  const expanded = q.startsWith('~') ? path.join(home, q.slice(1)) : q;
+  const endsWithSep = /[\\/]$/.test(q);
+  const dir = endsWithSep ? expanded : path.dirname(expanded);
+  const prefix = endsWithSep ? '' : path.basename(expanded).toLowerCase();
+  let entries = [];
+  try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return { root: dir, files: [], outside: true }; }
+  const shown = (full) => (full.startsWith(home + path.sep) ? `~${full.slice(home.length)}` : full);
+  const files = entries
+    .filter((e) => (!e.name.startsWith('.') || prefix.startsWith('.')) && e.name.toLowerCase().startsWith(prefix))
+    .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))
+    .slice(0, limit)
+    .map((e) => {
+      const full = path.join(dir, e.name);
+      return { path: shown(full) + (e.isDirectory() ? '/' : ''), abs: full, dir: e.isDirectory() };
+    });
+  return { root: dir, files, outside: true };
 }

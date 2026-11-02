@@ -7,19 +7,25 @@ import { resolveApiKey } from './settings.js';
  */
 
 const SYSTEM = `You triage messages a user sends to an AI assistant while it is still working on a task.
-Decide whether the new message should INTERRUPT the current task or be QUEUED until it finishes.
+Recommend one of four options. The user decides; you only recommend.
 
-Interrupt when the new message:
+INTERRUPT (stop and re-specify) when the new message:
 - tells the assistant to stop, cancel, or change course
 - corrects a mistake or wrong assumption the current work depends on
-- is urgent or time-sensitive, or makes the current work pointless
+- makes the current work pointless
 
-Queue when the new message:
-- adds a follow-up, extra request, or detail that can wait
-- is unrelated to the current task
-- is a question that does not affect the current work
+QUEUE (wait, then handle with the other queued messages) when the new message:
+- adds a follow-up or detail for the same task that can wait
+- depends on the current work being finished first
 
-Reply with only JSON: {"decision":"interrupt"|"queue","reason":"<one short sentence>"}`;
+PARALLEL (start it now in a branch of this chat, with the same context) when the new message:
+- is a separate piece of work in the same project or topic that needs this chat's context
+- does not depend on, and won't conflict with, the files the current task is changing
+
+NEW (start it now in a fresh chat without this context) when the new message:
+- is unrelated to this chat's topic
+
+Reply with only JSON: {"decision":"interrupt"|"queue"|"parallel"|"new","reason":"<one short sentence>"}`;
 
 const SMALL_MODELS = {
   anthropic: 'claude-haiku-5-5',
@@ -61,7 +67,8 @@ export function parseVerdict(text) {
   if (m) {
     try {
       const j = JSON.parse(m[0]);
-      const decision = /interrupt/i.test(j.decision) ? 'interrupt' : 'queue';
+      const d = String(j.decision || '').toLowerCase();
+      const decision = ['interrupt', 'queue', 'parallel', 'new'].find((x) => d.includes(x)) || 'queue';
       return { decision, reason: String(j.reason || '').slice(0, 300) };
     } catch { /* fall through */ }
   }

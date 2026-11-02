@@ -419,7 +419,9 @@ async function saveImported(source, chat, match, { force } = {}) {
     projectId: existing?.projectMoved ? existing.projectId : match.projectId,
     claudeCodeSessionId: chat.claudeCodeSessionId || existing?.claudeCodeSessionId || null,
     cwd: chat.cwd || null, // Claude Code resumes a session only from the folder it ran in
-    imported: { source, key: chat.key, at: new Date().toISOString(), placedBy: match.how },
+    imported: { source, key: chat.key, at: new Date().toISOString(), placedBy: match.how, ...(chat.sourceMtime ? { sourceMtime: chat.sourceMtime } : {}) },
+    // Past chats arrive already read; a live terminal session keeps its unread state.
+    readAt: existing?.readAt || chat.updatedAt || null,
     // Turns added in the harness after an earlier import stay at the end.
     messages: [...chat.messages, ...(existing?.messages || []).filter((m) => !m.imported)],
   };
@@ -453,7 +455,7 @@ export function importLocal(settings, opts = {}) {
     const idx = opts.force ? {} : await readIndex();
     const now = opts.now ?? Date.now();
     const ownSessions = new Set();
-    for (const c of await store.listConversations()) {
+    for (const c of await store.listConversations({ includeEmpty: true })) {
       if (c.imported) continue;
       const full = await store.getConversation(c.id);
       if (full?.claudeCodeSessionId) ownSessions.add(full.claudeCodeSessionId);
@@ -469,9 +471,10 @@ export function importLocal(settings, opts = {}) {
         const st = await fs.stat(item.file);
         const stamp = `${st.size}:${st.mtimeMs}`;
         if (idx[item.file] === stamp) { report.unchanged += 1; continue; }
-        // A transcript written in the last 2 minutes is probably a session still running; take it next time.
-        if (now - st.mtimeMs < 120_000) { report.active = (report.active || 0) + 1; continue; }
-        const chat = { key: item.key, ...(await item.load()) };
+        // A transcript written in the last 2 minutes is a session still running in a terminal:
+        // it is imported too (and refreshed on the next pass), flagged as live.
+        if (now - st.mtimeMs < 120_000) report.active = (report.active || 0) + 1;
+        const chat = { key: item.key, ...(await item.load()), sourceMtime: st.mtimeMs };
         // Skip empty sessions, one-sided automated runs that never got a reply, the harness's
         // helper calls, and Claude Code sessions that already are harness chats.
         const first = chat.messages.find((m) => m.role === 'user');

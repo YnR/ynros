@@ -31,11 +31,15 @@ export function toContents(messages) {
   const out = [];
   for (const m of messages) {
     const text = m.providerContent || m.content;
-    if (!text) continue;
+    const images = m.role === 'user' ? (m.imageData || []) : [];
+    if (!text && !images.length) continue;
     const role = m.role === 'assistant' ? 'model' : 'user';
+    const parts = [...images.map((i) => ({ inlineData: { mimeType: i.mime, data: i.data } })), ...(text ? [{ text }] : [])];
     const last = out[out.length - 1];
-    if (last && last.role === role) last.parts[0].text += `\n\n${text}`;
-    else out.push({ role, parts: [{ text }] });
+    const lastText = last?.parts.find((p) => p.text != null);
+    if (last && last.role === role && lastText && !images.length) lastText.text += `\n\n${text}`;
+    else if (last && last.role === role) last.parts.push(...parts);
+    else out.push({ role, parts });
   }
   while (out.length && out[0].role !== 'user') out.shift();
   return out;
@@ -48,6 +52,7 @@ export async function* stream({ settings, messages, model, signal, fetchImpl = f
   const contents = toContents(messages);
   const system = [cfg.systemPrompt, systemNote].filter(Boolean).join('\n\n');
   const total = { input: 0, output: 0 };
+  let context = 0;
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
     const body = { contents };
@@ -79,7 +84,7 @@ export async function* stream({ settings, messages, model, signal, fetchImpl = f
       if (cand?.finishReason) finish = cand.finishReason;
       if (data.usageMetadata) usage = data.usageMetadata;
     }
-    if (usage) { total.input += usage.promptTokenCount || 0; total.output += usage.candidatesTokenCount || 0; }
+    if (usage) { total.input += usage.promptTokenCount || 0; total.output += usage.candidatesTokenCount || 0; context = usage.promptTokenCount || context; }
 
     const calls = modelParts.filter((p) => p.functionCall);
     if (!calls.length || !runTool) {
@@ -99,7 +104,7 @@ export async function* stream({ settings, messages, model, signal, fetchImpl = f
     contents.push({ role: 'user', parts: responses });
     yield { type: 'text', text: '\n\n' };
   }
-  yield { type: 'meta', usage: total };
+  yield { type: 'meta', usage: total, ...(context ? { context } : {}) };
 }
 
 /** Gemini accepts an OpenAPI subset: drop empty `properties` objects. */

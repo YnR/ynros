@@ -137,10 +137,10 @@ test('importLocal places chats by folder, adds repos as projects, sends the rest
   }
   settings.history = { ...settings.history, claudeCodeDir: cc, geminiDir: path.join(gem, 'tmp') };
   const r = await importLocal(settings);
-  assert.equal(r.added, 4, JSON.stringify(r));
-  assert.equal(r.active, 1);
+  assert.equal(r.added, 5, JSON.stringify(r));
+  assert.equal(r.active, 1, 'a session running in a terminal is imported too');
   assert.equal(r.skipped, 1);
-  assert.equal(r.misc, 1);
+  assert.equal(r.misc, 2);
   assert.equal(r.byProject.Known, 2);
   assert.ok(r.newProjects.includes(path.basename(repo)));
 

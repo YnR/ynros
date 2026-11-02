@@ -11,7 +11,36 @@ import { DATA_DIR } from './settings.js';
 const REGISTRY = () => path.join(DATA_DIR, 'projects.json');
 
 export function defaultHostFolder() {
-  return path.join(os.homedir(), 'Harness Projects');
+  return path.join(os.homedir(), 'src');
+}
+
+// A folder in the host folder counts as a project when it has one of these.
+const MARKERS = ['CLAUDE.md', 'AGENTS.md', 'GEMINI.md', '.git', '.claude'];
+
+async function markersIn(dir) {
+  const found = [];
+  for (const m of MARKERS) {
+    try { await fs.access(path.join(dir, m)); found.push(m); } catch { /* absent */ }
+  }
+  return found;
+}
+
+/** Explains whether a folder shows up as a project, and why not. */
+export async function explain(settings, folder) {
+  const host = settings.projects?.hostFolder || defaultHostFolder();
+  const dir = path.resolve(String(folder || '').replace(/^~(?=$|[\\/])/, os.homedir()));
+  const st = await fs.stat(dir).catch(() => null);
+  if (!st) return { listed: false, reasons: [`${dir} does not exist.`] };
+  if (!st.isDirectory()) return { listed: false, reasons: [`${dir} is a file, not a folder.`] };
+  const all = await listProjects(settings);
+  const hit = all.find((p) => path.resolve(p.path) === dir);
+  if (hit) return { listed: true, project: hit, reasons: [hit.discovered ? `Found automatically in ${host} (has ${hit.markers?.join(', ')}).` : 'Added to the project list.'] };
+  const reasons = [];
+  if (path.dirname(dir) !== path.resolve(host)) reasons.push(`Only folders directly inside the projects folder (${host}) are found automatically; this one is in ${path.dirname(dir)}. Add it with "+ Project → Use an existing folder".`);
+  const markers = await markersIn(dir);
+  if (!markers.length) reasons.push(`It has none of ${MARKERS.join(', ')}, which is how a project is recognized.`);
+  if (path.basename(dir).startsWith('.')) reasons.push('Hidden folders are skipped.');
+  return { listed: false, reasons: reasons.length ? reasons : ['It should be listed; reload the page.'] };
 }
 
 function slug(name) {
@@ -43,17 +72,15 @@ Describe what this project is about.
 
 export async function listProjects(settings) {
   const list = await readRegistry();
-  // Pick up project folders created by hand in the host folder.
+  // Pick up existing projects in the host folder: repos and folders with instructions.
   const host = settings.projects?.hostFolder || defaultHostFolder();
   try {
     for (const e of await fs.readdir(host, { withFileTypes: true })) {
-      if (!e.isDirectory()) continue;
+      if (!e.isDirectory() || e.name.startsWith('.') || e.name === 'node_modules') continue;
       const p = path.join(host, e.name);
       if (list.some((x) => x.path === p)) continue;
-      try {
-        await fs.access(path.join(p, 'CLAUDE.md'));
-        list.push({ id: slug(e.name), name: e.name, path: p, discovered: true });
-      } catch { /* not a project */ }
+      const markers = await markersIn(p);
+      if (markers.length) list.push({ id: slug(e.name), name: e.name, path: p, discovered: true, markers });
     }
   } catch { /* host folder not created yet */ }
   const seen = new Set();

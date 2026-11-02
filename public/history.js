@@ -13,7 +13,7 @@ function describe(r) {
   if (r.newProjects?.length) parts.push(`New projects: ${[...new Set(r.newProjects)].join(', ')}.`);
   if (r.unchanged) parts.push(`${r.unchanged} already up to date.`);
   if (r.skipped) parts.push(`${r.skipped} skipped (empty or never answered).`);
-  if (r.active) parts.push(`${r.active} still in use, will import next time.`);
+  if (r.active) parts.push(`${r.active} running in a terminal right now (kept in sync).`);
   if (r.errors?.length) parts.push(`Problems: ${r.errors.slice(0, 3).join('; ')}${r.errors.length > 3 ? '…' : ''}`);
   return parts.join(' ');
 }

@@ -9,7 +9,7 @@ const fileFor = (id) => {
   return path.join(DIR(), `${id}.json`);
 };
 
-export async function listConversations() {
+export async function listConversations({ includeEmpty = false } = {}) {
   let files = [];
   try { files = await fs.readdir(DIR()); } catch (e) { if (e.code === 'ENOENT') return []; throw e; }
   const out = [];
@@ -17,7 +17,15 @@ export async function listConversations() {
     if (!f.endsWith('.json')) continue; // skips in-flight .tmp files
     try {
       const c = JSON.parse(await fs.readFile(path.join(DIR(), f), 'utf8'));
-      out.push({ id: c.id, title: c.title, provider: c.provider, model: c.model, projectId: c.projectId || null, updatedAt: c.updatedAt, imported: c.imported?.source || null });
+      // A chat nobody has written in yet is not listed (and is cleaned up later).
+      if (!includeEmpty && !c.messages?.some((m) => m.role === 'user') && !c.queue?.length) continue;
+      const lastReply = [...c.messages].reverse().find((m) => m.role === 'assistant');
+      out.push({
+        id: c.id, title: c.title, provider: c.provider, model: c.model, projectId: c.projectId || null,
+        updatedAt: c.updatedAt, imported: c.imported?.source || null,
+        lastReplyAt: lastReply?.ts || null, readAt: c.readAt || null,
+        liveInTerminal: Boolean(c.imported?.sourceMtime && Date.now() - c.imported.sourceMtime < 120_000),
+      });
     } catch { /* skip corrupt file */ }
   }
   return out.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
@@ -64,6 +72,24 @@ export async function createConversation({ provider, model, title, projectId = n
     claudeCodeSessionId: null,
     messages: [],
   });
+}
+
+/** Removes chats that never got a message (older than `minAgeMs`). */
+export async function pruneEmpty({ minAgeMs = 3_600_000 } = {}) {
+  let files = [];
+  try { files = await fs.readdir(DIR()); } catch { return 0; }
+  let n = 0;
+  for (const f of files) {
+    if (!f.endsWith('.json')) continue;
+    try {
+      const c = JSON.parse(await fs.readFile(path.join(DIR(), f), 'utf8'));
+      if (c.messages?.length || c.queue?.length) continue;
+      if (Date.now() - Date.parse(c.createdAt || 0) < minAgeMs) continue;
+      await fs.unlink(path.join(DIR(), f));
+      n += 1;
+    } catch { /* skip */ }
+  }
+  return n;
 }
 
 export async function deleteConversation(id) {

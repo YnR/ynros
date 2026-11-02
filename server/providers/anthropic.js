@@ -35,13 +35,22 @@ export function toApiMessages(messages) {
   const out = [];
   for (const m of messages) {
     const text = m.providerContent || m.content;
-    if (!text) continue;
+    const images = m.role === 'user' ? (m.imageData || []) : [];
+    if (!text && !images.length) continue;
     const role = m.role === 'assistant' ? 'assistant' : 'user';
+    const blocks = [
+      ...images.map((i) => ({ type: 'image', source: { type: 'base64', media_type: i.mime, data: i.data } })),
+      ...(text ? [{ type: 'text', text }] : []),
+    ];
     const last = out[out.length - 1];
-    if (last && last.role === role) last.content += `\n\n${text}`;
-    else out.push({ role, content: text });
+    if (last && last.role === role) last.content.push(...blocks);
+    else out.push({ role, content: blocks });
   }
   while (out.length && out[0].role !== 'user') out.shift();
+  // Plain text turns stay strings (smaller requests, and what the tests expect).
+  for (const m of out) {
+    if (m.content.every((b) => b.type === 'text')) m.content = m.content.map((b) => b.text).join('\n\n');
+  }
   return out;
 }
 
@@ -49,6 +58,7 @@ export async function* stream({ settings, messages, model, signal, fetchImpl = f
   const key = requireKey(settings);
   const cfg = settings.anthropic;
   const msgs = toApiMessages(messages);
+  let context = 0;
   const system = [cfg.systemPrompt, systemNote].filter(Boolean).join('\n\n');
   const total = { input: 0, output: 0 };
 
@@ -74,9 +84,13 @@ export async function* stream({ settings, messages, model, signal, fetchImpl = f
     for await (const { data } of readSSE(res.body)) {
       if (!data || typeof data !== 'object') continue;
       switch (data.type) {
-        case 'message_start':
-          total.input += data.message?.usage?.input_tokens || 0;
+        case 'message_start': {
+          const u = data.message?.usage || {};
+          total.input += u.input_tokens || 0;
+          // Everything sent in this round is what currently fills the context window.
+          context = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
           break;
+        }
         case 'content_block_start': {
           const b = data.content_block || {};
           blocks[data.index] = b.type === 'tool_use'
@@ -123,5 +137,5 @@ export async function* stream({ settings, messages, model, signal, fetchImpl = f
     msgs.push({ role: 'user', content: results });
     yield { type: 'text', text: '\n\n' };
   }
-  yield { type: 'meta', usage: total };
+  yield { type: 'meta', usage: total, ...(context ? { context } : {}) };
 }

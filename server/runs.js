@@ -7,6 +7,7 @@ import { getProject, readInstructions } from './projects.js';
 import { claudeCodeServers } from './mcp/registry.js';
 import { local } from './local.js';
 import * as quota from './quota.js';
+import { activeMessages, withImageData, contextLimit } from './convo.js';
 
 const MCP_SERVER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-server.js');
 
@@ -38,6 +39,27 @@ async function runOptions(settings, providerName, conv) {
   return out;
 }
 
+/** Background tasks (shell commands the agent left running), kept per chat. */
+export function applyBackground(list, ev) {
+  let t = list.find((x) => x.id === ev.id);
+  if (!t) { t = { id: ev.id, status: 'running', taskType: ev.taskType || 'task', description: '' }; list.push(t); }
+  for (const k of ['status', 'taskType', 'description', 'startedAt', 'endedAt', 'result']) if (ev[k] !== undefined) t[k] = ev[k];
+  if (list.length > 50) list.splice(0, list.length - 50);
+  return t;
+}
+
+/** Turns provider errors that need the user to do something into plain advice. */
+export function friendlyError(message, provider, model) {
+  const m = String(message || '');
+  if (/not allowed to access model|does not have access to (the )?model|model.*not (available|found)|permission.*model/i.test(m)) {
+    return `${m}\n\nYour account can't use the model "${model || 'selected'}". Pick another model in the composer (or set "auto"), or check which models your plan includes.`;
+  }
+  if (/\b401\b|invalid x-api-key|authentication_error|API key not valid/i.test(m)) {
+    return `${m}\n\nThe ${provider === 'gemini' ? 'Gemini' : 'Claude'} key or sign-in was refused. Check it in Settings.`;
+  }
+  return m;
+}
+
 export const hub = new EventEmitter();
 hub.setMaxListeners(0);
 
@@ -62,6 +84,11 @@ export function applySubagent(list, ev) {
   }
   for (const k of ['status', 'agentType', 'description', 'background', 'startedAt', 'endedAt', 'result', 'activity', 'tokens']) {
     if (ev[k] !== undefined) sa[k] = ev[k];
+  }
+  if (ev.log) {
+    sa.log ||= [];
+    sa.log.push({ ...ev.log, ts: new Date().toISOString() });
+    if (sa.log.length > 200) sa.log.splice(0, sa.log.length - 200);
   }
   if (typeof ev.toolUses === 'number') sa.toolUses = Math.max(sa.toolUses, ev.toolUses);
   else if (ev.toolUse) sa.toolUses += 1;
@@ -127,8 +154,11 @@ export function startRun({ conv, provider, providerName, model, settings, onFini
       }
       let extra = {};
       try { extra = await runOptions(settings, providerName, conv); } catch (e) { console.warn('tools unavailable:', e.message); }
+      // Only turns since the last /clear; API models also get pasted images.
+      let messages = activeMessages(conv.messages);
+      if (providerName !== 'claudeCode') messages = await withImageData(messages);
       for await (const ev of provider.stream({
-        settings, messages: conv.messages, model, signal: run.controller.signal, conversation: conv, ...extra,
+        settings, messages, model, signal: run.controller.signal, conversation: conv, ...extra,
       })) {
         if (ev.type === 'text') assistant.content += ev.text;
         else if (ev.type === 'tool' || ev.type === 'tool_result') assistant.events.push(ev);
@@ -137,7 +167,16 @@ export function startRun({ conv, provider, providerName, model, settings, onFini
           if (existing) Object.assign(existing, ev);
           else assistant.events.push({ ...ev });
         }
+        else if (ev.type === 'notice') assistant.events.push(ev);
+        else if (ev.type === 'background') {
+          conv.background ||= [];
+          const bg = applyBackground(conv.background, ev);
+          bg.runId = run.id;
+          emit({ type: 'background', task: { ...bg } });
+          continue;
+        }
         else if (ev.type === 'error') {
+          ev.message = friendlyError(ev.message, providerName, model);
           assistant.error = ev.message;
           const limit = quota.limitFromError(ev.message);
           if (limit) run.quotaLimited = limit;
@@ -154,16 +193,23 @@ export function startRun({ conv, provider, providerName, model, settings, onFini
           hub.emit('update', { type: 'quota', provider: providerName, ...st });
           continue;
         } else if (ev.type === 'meta') {
-          if (ev.sessionId) conv.claudeCodeSessionId = ev.sessionId;
+          if (ev.sessionId) { conv.claudeCodeSessionId = ev.sessionId; delete conv.forkSession; }
           if (ev.usage) { assistant.usage = ev.usage; quota.record(providerName, ev.usage); }
           if (ev.costUsd != null) assistant.costUsd = ev.costUsd;
           if (ev.model && !assistant.model) assistant.model = ev.model;
+          if (ev.context) {
+            assistant.context = ev.context;
+            conv.context = { used: ev.context, limit: contextLimit(providerName, model || assistant.model) };
+            emit({ type: 'context', ...conv.context });
+            continue;
+          }
         }
         emit(ev);
       }
     } catch (e) {
       if (!run.controller.signal.aborted) {
-        assistant.error = e.message;
+        assistant.error = friendlyError(e.message, providerName, model);
+        e.message = assistant.error;
         const limit = quota.limitFromError(e);
         if (limit) run.quotaLimited = limit;
         emit({ type: 'error', message: e.message });
@@ -175,6 +221,10 @@ export function startRun({ conv, provider, providerName, model, settings, onFini
       hub.emit('update', { type: 'quota', provider: providerName, ...st });
     }
     if (run.controller.signal.aborted) assistant.stopped = true;
+    for (const t of conv.background || []) {
+      // Background shells outlive the CLI process; mark them unknown rather than running forever.
+      if (t.runId === run.id && t.status === 'running') { t.status = 'detached'; t.endedAt = new Date().toISOString(); emit({ type: 'background', task: { ...t } }); }
+    }
     for (const sa of conv.subagents) {
       if (sa.runId === run.id && sa.status === 'running') {
         sa.status = 'stopped';
