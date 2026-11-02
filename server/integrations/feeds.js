@@ -60,14 +60,47 @@ export function parseFeed(xml) {
   return { title, items };
 }
 
+/** Feed URLs advertised by an HTML page, then common locations. */
+export function discoverFeeds(html, pageUrl) {
+  const out = [];
+  for (const m of html.matchAll(/<link\b[^>]*>/gi)) {
+    const tagText = m[0];
+    if (!/rel=["']?alternate/i.test(tagText) || !/type=["']?application\/(rss|atom)\+xml/i.test(tagText)) continue;
+    const href = tagText.match(/href=["']([^"']+)["']/i);
+    if (href) { try { out.push(new URL(decode(href[1]), pageUrl).href); } catch { /* bad href */ } }
+  }
+  const base = pageUrl.endsWith('/') ? pageUrl : `${pageUrl}/`;
+  for (const p of ['feed.xml', 'rss.xml', 'atom.xml', 'index.xml', 'feed', 'rss']) {
+    try { out.push(new URL(p, base).href); } catch { /* ignore */ }
+  }
+  return [...new Set(out)];
+}
+
 const cache = new Map();
 
 export async function loadSource(src, fetchImpl = fetch) {
   const hit = cache.get(src.url);
   if (hit && Date.now() - hit.at < 20 * 60_000) return hit.data;
-  const res = await fetchImpl(src.url, { headers: { accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml' }, signal: AbortSignal.timeout(15_000) });
+  const get = (u) => fetchImpl(u, { headers: { accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, text/html' }, signal: AbortSignal.timeout(15_000) });
+  let res;
+  try { res = await get(src.url); } catch (e) { throw new Error(`${src.name}: ${e.cause?.code || e.message}`); }
   if (!res.ok) throw new Error(`${src.name}: ${res.status}`);
-  const data = parseFeed(await res.text());
+  let text = await res.text();
+  if (!/<(rss|feed|rdf:RDF)[\s>]/i.test(text)) {
+    // A web page: follow its <link rel="alternate"> to the feed, or try common feed paths.
+    const candidates = discoverFeeds(text, src.url);
+    let found = false;
+    for (const u of candidates) {
+      try {
+        const r = await get(u);
+        if (!r.ok) continue;
+        const t = await r.text();
+        if (/<(rss|feed|rdf:RDF)[\s>]/i.test(t)) { text = t; found = true; break; }
+      } catch { /* try next */ }
+    }
+    if (!found) throw new Error(`${src.name}: no RSS or Atom feed found at ${src.url}`);
+  }
+  const data = parseFeed(text);
   cache.set(src.url, { at: Date.now(), data });
   return data;
 }

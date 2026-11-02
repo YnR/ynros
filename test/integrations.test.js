@@ -234,3 +234,16 @@ test('feeds: parses RSS and Atom, builds Google News topic feeds', async () => {
   assert.equal(srcs[0].name, 'UXR');
   assert.match(srcs[1].url, /^https:\/\/news\.google\.com\/rss\/search\?q=AI\+research\+when%3A2d/);
 });
+
+test('feeds: a site URL is followed to its feed', async () => {
+  const feeds = await import('../server/integrations/feeds.js');
+  const html = '<html><head><link rel="alternate" type="application/rss+xml" href="/uxr-digest/feed.xml"></head></html>';
+  assert.deepEqual(feeds.discoverFeeds(html, 'https://ynr.github.io/uxr-digest/').slice(0, 2), [
+    'https://ynr.github.io/uxr-digest/feed.xml', 'https://ynr.github.io/uxr-digest/rss.xml',
+  ]);
+  const fetchImpl = async (u) => (u.endsWith('/uxr-digest/')
+    ? new Response(html)
+    : u.endsWith('feed.xml') ? new Response('<rss><channel><title>UXR</title><item><title>A</title><link>https://x/a</link></item></channel></rss>') : new Response('', { status: 404 }));
+  const r = await feeds.loadSource({ name: 'UXR', url: 'https://ynr.github.io/uxr-digest/' }, fetchImpl);
+  assert.equal(r.items[0].title, 'A');
+});

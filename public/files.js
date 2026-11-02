@@ -81,7 +81,7 @@ function setMode(m) {
 async function openEditor() {
   try { await loadEditorLib(); } catch (e) { $('#file-state').textContent = e.message; return; }
   if (editor) return;
-  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
   editor = new window.ToastEditor({
     el: $('#file-editor'),
     height: '100%',

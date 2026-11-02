@@ -1,6 +1,10 @@
 import { renderMarkdown } from './markdown.js';
 import { notify, permissionState, requestPermission } from './notify.js';
 import { initFiles, showFiles } from './files.js';
+import { renderSidebar, initSidebarCollapse } from './sidebar.js';
+import { initMentions } from './mentions.js';
+import { initToday, showToday } from './today.js';
+import { initSettingsExtra, applyTheme, loadMcp, fillQuota, collectQuota } from './settings-extra.js';
 
 const $ = (sel) => document.querySelector(sel);
 const PROVIDER_LABEL = { anthropic: 'Claude', claudeCode: 'Claude Code', gemini: 'Gemini' };
@@ -12,7 +16,12 @@ const state = {
   live: null, // { message, node, tools, body, abort } for the run being shown
   activeRuns: new Map(), // conversationId -> run summary (from /api/events)
   modelCache: {},
+  projects: [],
+  projectId: null, // project for the next new chat
+  quota: {},
 };
+window.harnessState = state;
+let sidebarCtl;
 
 export async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -50,28 +59,35 @@ export function openModal({ title, sub = '', markdown = null, loading = false })
 /* ---------- conversations ---------- */
 
 async function refreshList() {
-  state.conversations = await api('/api/conversations');
+  const [convs, proj] = await Promise.all([
+    api('/api/conversations'),
+    api('/api/projects').catch(() => ({ projects: [] })),
+  ]);
+  state.conversations = convs;
+  state.projects = proj.projects;
+  state.hostFolder = proj.hostFolder;
   renderList();
 }
 
 function renderList() {
-  const list = $('#conv-list');
-  list.replaceChildren(...state.conversations.map((c) => {
-    const a = el('a', `conv-item${state.current?.id === c.id ? ' active' : ''}`);
-    a.href = `#/c/${c.id}`;
-    const title = el('span', 'conv-title', c.title || 'New chat');
-    const run = state.activeRuns.get(c.id);
-    if (run) {
-      const subs = run.subagents.filter((s) => s.status === 'running').length;
-      const badge = el('span', 'run-badge', subs ? `${subs} agent${subs > 1 ? 's' : ''}` : '');
-      badge.title = subs ? `${subs} subagent${subs > 1 ? 's' : ''} running` : 'Working';
-      a.append(el('span', 'spinner'), title, badge);
-    } else {
-      a.append(title);
-    }
-    a.append(el('small', null, [PROVIDER_LABEL[c.provider], c.model].filter(Boolean).join(' · ')));
-    return a;
-  }));
+  renderSidebar($('#conv-list'), {
+    projects: state.projects,
+    conversations: state.conversations,
+    currentId: state.current?.id,
+    activeRuns: state.activeRuns,
+    onNew: (projectId) => { location.hash = projectId ? `#/new/${projectId}` : '#/new'; },
+  });
+}
+
+function projectName(id) {
+  return state.projects.find((p) => p.id === id)?.name || null;
+}
+
+function showProjectBadge(id) {
+  const badge = $('#chat-project');
+  const name = projectName(id);
+  badge.hidden = !name;
+  badge.textContent = name ? `📁 ${name}` : '';
 }
 
 function setComposer(provider, model) {
@@ -86,11 +102,17 @@ function detachLive() {
   state.live = null;
 }
 
-function newChat() {
+function defaultModel(p) {
+  return state.settings.routing?.enabled !== false ? 'auto' : state.settings[p]?.model;
+}
+
+function newChat(projectId = null) {
   detachLive();
   state.current = null;
+  state.projectId = projectId;
+  showProjectBadge(projectId);
   const p = state.settings.defaultProvider;
-  setComposer(p, state.settings[p]?.model);
+  setComposer(p, defaultModel(p));
   renderAll();
   $('#chat-title').textContent = 'New chat';
   $('#rename-chat').hidden = $('#delete-chat').hidden = true;
@@ -107,6 +129,8 @@ async function openConversation(id) {
     return;
   }
   setComposer(state.current.provider, state.current.model);
+  state.projectId = state.current.projectId || null;
+  showProjectBadge(state.current.projectId);
   $('#chat-title').textContent = state.current.title;
   $('#rename-chat').hidden = $('#delete-chat').hidden = false;
   renderAll();
@@ -165,7 +189,15 @@ function messageNode(m) {
   const who = m.role === 'user'
     ? (m.batch ? `You · ${m.batch.length} queued messages` : 'You')
     : [PROVIDER_LABEL[m.provider] || 'Assistant', m.model].filter(Boolean).join(' · ');
-  wrap.append(el('div', 'who', who));
+  const whoEl = el('div', 'who', who);
+  if (m.routed) whoEl.append(el('span', 'routed muted', ` · auto: ${m.routed.tier}`));
+  if (m.routed?.reason) whoEl.title = m.routed.reason;
+  wrap.append(whoEl);
+  if (m.attachments?.length) {
+    const at = el('div', 'attachments');
+    m.attachments.forEach((a) => at.append(el('span', 'attachment', `@${a}`)));
+    wrap.append(at);
+  }
   const tools = el('div', 'tools');
   for (const ev of m.events || []) {
     if (ev.type === 'skill') upsertSkill(tools, ev);
@@ -202,7 +234,103 @@ function renderAll() {
   renderMessages();
   renderSubagents();
   renderQueue();
+  renderBanners();
   setBusy(Boolean(state.current?.running));
+}
+
+/* ---------- banners: usage limits, fresh-chat suggestion ---------- */
+
+function bannerButton(label, onClick, primary = false) {
+  const b = el('button', `btn small${primary ? ' primary' : ''}`, label);
+  b.type = 'button';
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+const fmtTime = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+async function switchProvider(provider, model) {
+  if (!state.current) {
+    setComposer(provider, model ?? defaultModel(provider));
+    renderBanners();
+    return;
+  }
+  await api(`/api/conversations/${state.current.id}/switch`, { method: 'POST', body: { provider, model: model ?? defaultModel(provider) } });
+  setTimeout(() => openConversation(state.current.id), 200);
+}
+
+function renderBanners() {
+  const box = $('#banners');
+  const out = [];
+  const conv = state.current;
+  const hold = conv?.quotaHold;
+  if (hold) {
+    const b = el('div', `banner ${hold.reason === 'exhausted' ? 'bad' : 'warn'}`);
+    const when = hold.resetsAt ? ` until about ${fmtTime(hold.resetsAt)}` : '';
+    const text = hold.reason === 'exhausted'
+      ? `${hold.label} is out of quota${when}. Waiting work will resume on its own then.`
+      : `${hold.label} is at ${Math.round((hold.utilization || 0) * 100)}% of its limit. Queued work is on hold to keep the last ${hold.reservePercent ?? 5}% for your new instructions.`;
+    b.append(el('span', 'grow', text));
+    for (const alt of hold.alternatives || []) b.append(bannerButton(`Switch to ${alt.label}`, () => switchProvider(alt.provider), true));
+    b.append(bannerButton(hold.reason === 'exhausted' ? 'Try now' : 'Send anyway', () => queueAction('all', 'send')));
+    out.push(b);
+  } else {
+    // Running low on the provider picked in the composer.
+    const p = $('#provider-select').value;
+    const q = state.quota[p];
+    if (q && (q.exhausted || q.low)) {
+      const b = el('div', `banner ${q.exhausted ? 'bad' : 'warn'}`);
+      const text = q.exhausted
+        ? `${q.label} is out of quota${q.resetsAt ? ` until about ${fmtTime(q.resetsAt)}` : ''}. Messages will wait for the reset.`
+        : `${q.label} is running low${q.utilization != null ? ` (${Math.round(q.utilization * 100)}% used)` : ''}.`;
+      b.append(el('span', 'grow', text));
+      for (const alt of q.alternatives || []) b.append(bannerButton(`Switch to ${alt.label}`, () => switchProvider(alt.provider), true));
+      out.push(b);
+    }
+  }
+  if (conv?.suggestNewChat) {
+    const b = el('div', 'banner warn');
+    b.append(el('span', 'grow', `This looks like a new topic${conv.suggestNewChat.reason ? ` (${conv.suggestNewChat.reason})` : ''}. A fresh chat avoids re-sending this chat's history and saves tokens.`));
+    b.append(bannerButton('Move to a new chat', async () => {
+      const r = await api(`/api/conversations/${conv.id}/new-chat`, { method: 'POST', body: {} });
+      location.hash = `#/c/${r.id}`;
+    }, true));
+    b.append(bannerButton('Keep here', async () => {
+      await api(`/api/conversations/${conv.id}/dismiss-suggestion`, { method: 'POST', body: {} });
+      conv.suggestNewChat = null;
+      renderBanners();
+    }));
+    out.push(b);
+  }
+  box.replaceChildren(...out);
+}
+
+async function refreshQuota() {
+  try { state.quota = await api('/api/quota'); } catch { state.quota = {}; }
+  renderBanners();
+}
+
+/* ---------- approvals ---------- */
+
+function approvalNode(ev) {
+  const d = el('div', `approval${ev.status === 'pending' ? '' : ' done'}`);
+  d.dataset.approvalId = ev.id;
+  const text = el('span', 'grow');
+  text.append(document.createTextNode(ev.status === 'pending' ? 'Wants to use ' : ev.status === 'allowed' ? 'Allowed ' : 'Denied '));
+  text.append(el('b', null, ev.tool));
+  if (ev.summary) text.append(document.createTextNode(': '), el('code', null, ev.summary));
+  d.append(text);
+  if (ev.status === 'pending') {
+    const answer = (allow) => api(`/api/approvals/${ev.id}`, { method: 'POST', body: { allow } }).catch((e) => alert(e.message));
+    d.append(bannerButton('Allow', () => answer(true), true), bannerButton('Deny', () => answer(false)));
+  }
+  return d;
+}
+
+function upsertApproval(container, ev) {
+  const existing = container.querySelector(`[data-approval-id="${ev.id}"]`);
+  const node = approvalNode(ev);
+  if (existing) existing.replaceWith(node); else container.append(node);
 }
 
 /* ---------- subagents ---------- */
@@ -326,7 +454,7 @@ async function send(text) {
   const provider = $('#provider-select').value;
   const model = $('#model-input').value.trim();
   if (!state.current) {
-    state.current = await api('/api/conversations', { method: 'POST', body: { provider, model } });
+    state.current = await api('/api/conversations', { method: 'POST', body: { provider, model, projectId: state.projectId } });
     history.replaceState(null, '', `#/c/${state.current.id}`);
     $('#rename-chat').hidden = $('#delete-chat').hidden = false;
   }
@@ -335,7 +463,10 @@ async function send(text) {
     const r = await api(`/api/conversations/${conv.id}/messages`, { method: 'POST', body: { text, provider, model } });
     if (r.queued) {
       conv.queue = [...(conv.queue || []).filter((q) => q.id !== r.item.id), r.item];
+      if (r.quotaHold) conv.quotaHold = r.quotaHold;
       renderQueue();
+      renderBanners();
+      refreshList();
       return;
     }
     // Reload so a paused queue merged into this turn shows up correctly.
@@ -401,10 +532,27 @@ async function attachStream(conv) {
           upsertSkill(tools, ev);
         } else if (ev.type === 'subagent') {
           applySubagent(ev.subagent);
+        } else if (ev.type === 'status') {
+          node.querySelector('.who').textContent = ev.text;
+        } else if (ev.type === 'routed') {
+          message.model = ev.model;
+          message.routed = { tier: ev.tier, reason: ev.reason };
+          const who = node.querySelector('.who');
+          who.textContent = [PROVIDER_LABEL[message.provider], ev.model].filter(Boolean).join(' · ');
+          who.append(el('span', 'routed muted', ` · auto: ${ev.tier}`));
+          who.title = ev.reason || '';
+        } else if (ev.type === 'suggest_new_chat') {
+          conv.suggestNewChat = { reason: ev.reason };
+          renderBanners();
+        } else if (ev.type === 'approval') {
+          upsertApproval(tools, ev);
+          stick();
         } else if (ev.type === 'queue') {
           conv.queue = ev.queue;
           conv.queuePaused = ev.paused;
+          conv.quotaHold = ev.quotaHold;
           renderQueue();
+          renderBanners();
         } else if (ev.type === 'error') {
           message.error = ev.message;
         } else if (ev.type === 'done') {
@@ -463,16 +611,31 @@ function connectEvents() {
           });
         }
       }
+      if (ev.status !== 'running') refreshQuota();
       if (!state.conversations.some((c) => c.id === ev.conversationId)) refreshList();
       else renderList();
       if (state.current?.id === ev.conversationId && ev.subagents) {
         for (const sa of ev.subagents) applySubagent(sa);
       }
+    } else if (ev.type === 'quota') {
+      refreshQuota();
+    } else if (ev.type === 'approval') {
+      if (ev.status === 'pending') {
+        const conv = state.conversations.find((c) => c.id === ev.conversationId);
+        maybeNotify({
+          title: `Approval needed: ${conv?.title || 'chat'}`,
+          body: `${ev.tool}${ev.summary ? `: ${ev.summary}` : ''}`,
+          conversationId: ev.conversationId,
+          tag: ev.id,
+        });
+      }
     } else if (ev.type === 'queue') {
       if (state.current?.id === ev.conversationId) {
         state.current.queue = ev.queue;
         state.current.queuePaused = ev.paused;
+        state.current.quotaHold = ev.quotaHold;
         renderQueue();
+        renderBanners();
       }
       const ask = ev.queue.find((q) => q.triage?.decision === 'interrupt' && !q.triage.dismissed && !q._notified);
       if (ask && state.activeRuns.has(ev.conversationId)) {
@@ -509,15 +672,23 @@ async function loadModelOptions(provider, listId = 'model-options') {
   const { models } = await state.modelCache[provider];
   const dl = document.getElementById(listId);
   if (listId === 'model-options' && $('#provider-select').value !== provider) return;
-  dl.replaceChildren(...models.filter((m) => m.id).map((m) => {
+  const opts = models.filter((m) => m.id).map((m) => {
     const o = document.createElement('option');
     o.value = m.id;
     o.label = m.label;
     return o;
-  }));
+  });
+  if (listId === 'model-options') {
+    const auto = document.createElement('option');
+    auto.value = 'auto';
+    auto.label = 'Pick the right model for each message';
+    opts.unshift(auto);
+  }
+  dl.replaceChildren(...opts);
 }
 
 function updateProviderStatus() {
+  renderBanners();
   const p = $('#provider-select').value;
   const dot = $('#provider-status');
   const s = state.settings?.[p];
@@ -535,7 +706,7 @@ function updateProviderStatus() {
 
 /* ---------- settings ---------- */
 
-const SECTIONS = ['anthropic', 'gemini', 'claudeCode', 'notifications', 'triage', 'google', 'calendars', 'tools', 'files'];
+const SECTIONS = ['anthropic', 'gemini', 'claudeCode', 'notifications', 'triage', 'google', 'calendars', 'tools', 'files', 'projects', 'contacts', 'routing', 'quota', 'appearance', 'sources'];
 
 function fillSettingsForm() {
   const s = state.settings;
@@ -545,7 +716,7 @@ function fillSettingsForm() {
   for (const p of SECTIONS) {
     for (const [k, v] of Object.entries(s[p] || {})) {
       const input = form.elements[`${p}.${k}`];
-      if (!input || k === 'apiKey' || k === 'clientSecret') continue;
+      if (!input || k === 'apiKey' || k === 'clientSecret' || (v && typeof v === 'object')) continue;
       if (input.type === 'checkbox') input.checked = Boolean(v);
       else input.value = v ?? '';
     }
@@ -568,6 +739,10 @@ function fillSettingsForm() {
   form.elements['google.clientSecret'].value = '';
   $('#google-secret-state').textContent = s.google.hasClientSecret ? 'saved' : 'not set';
   $('#google-secret-state').className = `key-state${s.google.hasClientSecret ? ' ok' : ''}`;
+  if (!s.projects.hostFolder) form.elements['projects.hostFolder'].placeholder = state.hostFolder || '~/Harness Projects';
+  applyTheme(s.appearance?.theme);
+  fillQuota(s);
+  loadMcp();
   updateNotifyState();
   loadIntegrations();
 }
@@ -619,6 +794,7 @@ function collectSettings() {
     patch[p] ||= {};
     patch[p][k] = input.type === 'checkbox' ? input.checked : input.value;
   }
+  collectQuota(patch);
   return patch;
 }
 
@@ -634,12 +810,13 @@ async function saveSettings(patch) {
 function route() {
   const hash = location.hash || '#/';
   $('#sidebar').classList.remove('open');
-  const view = hash.startsWith('#/settings') ? 'settings' : hash.startsWith('#/files') ? 'files' : 'chat';
-  $('#chat-view').hidden = view !== 'chat';
-  $('#settings-view').hidden = view !== 'settings';
-  $('#files-view').hidden = view !== 'files';
+  const view = hash.startsWith('#/settings') ? 'settings'
+    : hash.startsWith('#/files') ? 'files'
+      : hash.startsWith('#/c/') || hash.startsWith('#/new') ? 'chat' : 'today';
+  for (const v of ['chat', 'settings', 'files', 'today']) $(`#${v}-view`).hidden = view !== v;
   $('#settings-link').classList.toggle('active', view === 'settings');
   $('#files-link').classList.toggle('active', view === 'files');
+  $('#today-link').classList.toggle('active', view === 'today');
   if (view === 'settings') {
     fillSettingsForm();
     const q = new URLSearchParams(hash.split('?')[1] || '');
@@ -650,12 +827,14 @@ function route() {
     return;
   }
   if (view === 'files') { showFiles(hash); return; }
+  if (view === 'today') { detachLive(); state.current = null; renderList(); showToday(); return; }
   const m = hash.match(/^#\/c\/([\w-]+)/);
   if (m) {
     if (state.current?.id !== m[1]) openConversation(m[1]);
-  } else {
-    newChat();
+    return;
   }
+  const np = hash.match(/^#\/new\/([\w-]+)/);
+  newChat(np ? np[1] : null);
 }
 
 /* ---------- wiring ---------- */
@@ -669,8 +848,31 @@ async function init() {
   state.settings = await api('/api/settings');
 
   $('#new-chat').addEventListener('click', () => {
-    if (location.hash === '#/' || location.hash === '') newChat();
-    else location.hash = '#/';
+    if (location.hash === '#/new') newChat();
+    else location.hash = '#/new';
+  });
+  sidebarCtl = initSidebarCollapse();
+  applyTheme(state.settings.appearance?.theme);
+
+  // Projects
+  $('#project-new').addEventListener('click', () => {
+    $('#project-host').textContent = `It will be created in ${state.settings.projects?.hostFolder || state.hostFolder || '~/Harness Projects'} with a CLAUDE.md and an outputs folder.`;
+    $('#project-result').textContent = '';
+    $('#project-form').reset();
+    $('#project-dialog').showModal();
+  });
+  $('#project-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target.elements;
+    try {
+      const p = await api('/api/projects', { method: 'POST', body: { name: f.name.value, existingPath: f.existingPath.value || undefined } });
+      $('#project-dialog').close();
+      await refreshList();
+      location.hash = `#/new/${p.id}`;
+    } catch (err) {
+      $('#project-result').className = 'test-result fail';
+      $('#project-result').textContent = err.message;
+    }
   });
 
   const input = $('#input');
@@ -721,7 +923,7 @@ async function init() {
   });
 
   for (const b of document.querySelectorAll('#toggle-sidebar, [data-toggle-sidebar]')) {
-    b.addEventListener('click', () => $('#sidebar').classList.toggle('open'));
+    b.addEventListener('click', () => sidebarCtl.show());
   }
   $('#modal').addEventListener('click', (e) => { if (e.target === $('#modal')) $('#modal').close(); });
 
@@ -793,6 +995,10 @@ async function init() {
   window.harnessDesktop?.onNavigate((hash) => { location.hash = hash; });
 
   initFiles({ api, el, openModal });
+  initMentions({ api, current: () => state.current, projectId: () => state.projectId });
+  initToday({ api });
+  initSettingsExtra({ api, save: saveSettings });
+  refreshQuota();
   window.addEventListener('hashchange', route);
   connectEvents();
   await refreshList();

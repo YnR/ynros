@@ -22,12 +22,23 @@
         <button class="btn ghost small" id="project-new" type="button" title="New project">+ Project</button>
       </div>
       <nav class="conv-list" id="conv-list" aria-label="Conversations"></nav>
+      <a class="nav-link" href="#/" id="today-link">☀ Today</a>
       <a class="nav-link" href="#/files" id="files-link">📝 Files</a>
       <a class="nav-link" href="#/settings" id="settings-link">⚙ Settings</a>
     </aside>
 
     <main class="main">
-      <section id="chat-view" class="view">
+      <section id="today-view" class="view" hidden>
+        <header class="chat-head">
+          <button class="btn ghost icon" data-toggle-sidebar aria-label="Show sidebar">☰</button>
+          <h1 id="today-title">Today</h1>
+          <button class="btn primary small" id="today-brief" type="button">Brief me</button>
+          <button class="btn ghost small" id="today-refresh" type="button">Refresh</button>
+        </header>
+        <div class="today" id="today-body"><p class="muted">Loading…</p></div>
+      </section>
+
+      <section id="chat-view" class="view" hidden>
         <header class="chat-head">
           <button class="btn ghost icon" id="toggle-sidebar" aria-label="Toggle sidebar">☰</button>
           <h1 id="chat-title">New chat</h1>
@@ -180,6 +191,8 @@
                 <option value="bypassPermissions">bypassPermissions (everything allowed, use with care)</option>
               </select>
             </label>
+            <label class="check"><input type="checkbox" name="claudeCode.askInChat"> Ask me in the chat when Claude Code needs permission (Allow / Deny)</label>
+            <label class="check"><input type="checkbox" name="claudeCode.chrome"> Use Claude in Chrome (lets Claude Code act in your Chrome browser)</label>
             <label class="field">
               <span>Allowed tools</span>
               <input name="claudeCode.allowedTools" placeholder="e.g. Read Grep Glob Bash(git status:*)">
@@ -297,6 +310,10 @@
             <legend>MCP servers</legend>
             <p class="muted">Servers added here work with every provider: Claude Code gets them directly, and the API models call them through the harness.</p>
             <div id="mcp-list" class="mcp-list"></div>
+            <div class="card-actions">
+              <button type="button" class="btn small" id="mcp-chrome">+ Add Chrome (DevTools MCP)</button>
+              <span class="muted small">Browser actions always ask you first.</span>
+            </div>
             <details class="sub">
               <summary>Add a server by hand</summary>
               <div class="sub-body">
@@ -363,6 +380,25 @@
               <span>Default folder for new projects</span>
               <input name="projects.hostFolder" placeholder="~/Harness Projects">
               <small class="muted">Each project is a folder with a <code>CLAUDE.md</code> for instructions and an <code>outputs/</code> folder.</small>
+            </label>
+          </fieldset>
+
+          <fieldset class="card">
+            <legend>Sources for Today</legend>
+            <p class="muted">Feeds and news topics the Today view and your briefs keep an eye on.</p>
+            <label class="field">
+              <span>RSS or Atom feeds</span>
+              <textarea name="sources.feeds" rows="3" placeholder="UXR News Digest | https://…/feed.xml"></textarea>
+              <small class="muted">One per line, optionally named as <code>Name | URL</code>.</small>
+            </label>
+            <label class="field">
+              <span>News topics</span>
+              <input name="sources.newsTopics" placeholder="e.g. user research, AI agents, Lisbon">
+              <small class="muted">Comma-separated. Headlines come from Google News.</small>
+            </label>
+            <label class="field">
+              <span>News language and region</span>
+              <input name="sources.newsRegion" placeholder="en-US:US">
             </label>
           </fieldset>
 
