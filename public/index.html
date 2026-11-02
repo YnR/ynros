@@ -383,6 +383,45 @@
             </label>
           </fieldset>
 
+          <fieldset class="card" id="ha-card">
+            <legend>Phone (Home Assistant)</legend>
+            <p class="muted">Uses Home Assistant for your phone's location (zones like home or Work) and to push notifications through the companion app. Create a long-lived access token under your HA profile → Security.</p>
+            <label class="field"><span>Home Assistant URL</span><input name="homeAssistant.url" placeholder="http://homeassistant.local:8123"></label>
+            <label class="field"><span>Access token <small class="key-state" id="ha-token-state"></small></span><input type="password" name="homeAssistant.token" placeholder="Leave blank to keep the current token"></label>
+            <div class="card-actions"><button type="button" class="btn small" id="ha-discover">Find my phone</button><span class="test-result" id="ha-result"></span></div>
+            <label class="field"><span>Location from</span><input name="homeAssistant.locationEntity" list="ha-trackers" placeholder="person.you or device_tracker.your_phone"><datalist id="ha-trackers"></datalist></label>
+            <label class="field"><span>Notify service</span><input name="homeAssistant.notifyService" list="ha-notify" placeholder="notify.mobile_app_your_phone"><datalist id="ha-notify"></datalist></label>
+            <div class="card-actions">
+              <button type="button" class="btn" data-test="homeAssistant">Test connection</button>
+              <button type="button" class="btn ghost" id="ha-test-notify">Send a test to my phone</button>
+              <span class="test-result" data-result="homeAssistant"></span>
+            </div>
+          </fieldset>
+
+          <fieldset class="card" id="automations-card">
+            <legend>Automations</legend>
+            <p class="muted">Notifications or prompts on a schedule, when you arrive at or leave a place, or both. You can also just ask in a chat: "remind me to buy milk when I leave work".</p>
+            <div id="auto-list" class="mcp-list"></div>
+            <details class="sub">
+              <summary>Add an automation</summary>
+              <div class="sub-body">
+                <label class="field"><span>Do</span>
+                  <select id="auto-action"><option value="notify">Send me a notification</option><option value="prompt">Run a prompt and notify me with the result</option></select>
+                </label>
+                <label class="field"><span id="auto-text-label">Notification text</span><input id="auto-text" placeholder="Buy milk"></label>
+                <div class="grid3">
+                  <label class="field"><span>At time (optional)</span><input id="auto-time" type="time"></label>
+                  <label class="field"><span>Days</span><select id="auto-days"><option value="">Every day</option><option value="1,2,3,4,5">Weekdays</option><option value="0,6">Weekends</option><option value="once">Once (next occurrence)</option></select></label>
+                  <span></span>
+                  <label class="field"><span>Place (optional)</span><input id="auto-zone" list="ha-zones" placeholder="home, Work…"><datalist id="ha-zones"></datalist></label>
+                  <label class="field"><span>When</span><select id="auto-zone-event"><option value="enter">I arrive</option><option value="leave">I leave</option><option value="in">I'm there (at the time)</option><option value="not_in">I'm not there (at the time)</option></select></label>
+                  <span></span>
+                </div>
+                <div class="card-actions"><button type="button" class="btn" id="auto-add">Add automation</button><span class="test-result" id="auto-result"></span></div>
+              </div>
+            </details>
+          </fieldset>
+
           <fieldset class="card">
             <legend>Sources for Today</legend>
             <p class="muted">Feeds and news topics the Today view and your briefs keep an eye on.</p>

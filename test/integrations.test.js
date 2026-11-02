@@ -247,3 +247,44 @@ test('feeds: a site URL is followed to its feed', async () => {
   const r = await feeds.loadSource({ name: 'UXR', url: 'https://ynr.github.io/uxr-digest/' }, fetchImpl);
   assert.equal(r.items[0].title, 'A');
 });
+
+test('automations: schedules, one-offs and geofences fire at the right moments', async () => {
+  const auto = await import('../server/automations.js');
+  const { hub } = await import('../server/runs.js');
+  auto._reset();
+  const fired = [];
+  const onUpdate = (ev) => { if (ev.type === 'automation' && ev.status === 'notify') fired.push(ev.title); };
+  hub.on('update', onUpdate);
+
+  // Schedule: due once within 10 minutes of the time, on the right days.
+  const r = { trigger: { schedule: { time: '08:30', days: [1] } }, lastFired: null };
+  const mon = new Date(2026, 10, 2, 8, 31); // Monday
+  assert.equal(auto.scheduleDue(r, mon), true);
+  assert.equal(auto.scheduleDue(r, new Date(2026, 10, 3, 8, 31)), false, 'Tuesday');
+  assert.equal(auto.scheduleDue(r, new Date(2026, 10, 2, 8, 50)), false, 'too late');
+  r.lastFired = mon.toISOString();
+  assert.equal(auto.scheduleDue(r, new Date(2026, 10, 2, 8, 35)), false, 'once per day');
+
+  // One-off reminder fires once and disables itself.
+  const at = new Date(Date.now() - 60_000).toISOString();
+  const once = await auto.create({ trigger: { at }, action: { type: 'notify', title: 'Call mum' } });
+  await auto.tick();
+  assert.deepEqual(fired, ['Call mum']);
+  assert.equal((await auto.list()).find((x) => x.id === once.id).enabled, false);
+
+  // Geofence: fires on the transition, not while staying.
+  await auto.create({ trigger: { zone: { zone: 'Work', event: 'leave' } }, action: { type: 'notify', title: 'Buy milk' } });
+  auto._setZone('Work');
+  await auto.tick();
+  assert.equal(fired.length, 1);
+  hub.off('update', onUpdate);
+  assert.match(auto.describe({ trigger: { schedule: { time: '08:00' }, zone: { zone: 'home', event: 'in' } }, action: { type: 'prompt', prompt: 'brief me' } }), /run "brief me" at 08:00 every day if I am at home/);
+});
+
+test('home assistant: zone matching', async () => {
+  const ha = await import('../server/integrations/homeassistant.js');
+  assert.equal(ha.inZone('home', 'home'), true);
+  assert.equal(ha.inZone('not_home', 'away'), true);
+  assert.equal(ha.inZone('Work', 'zone.work'), true);
+  assert.equal(ha.inZone('Gym', 'Work'), false);
+});

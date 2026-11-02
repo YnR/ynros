@@ -6,6 +6,8 @@ import * as contacts from './integrations/contacts.js';
 import * as mcp from './mcp/registry.js';
 import * as approvals from './approvals.js';
 import * as feeds from './integrations/feeds.js';
+import * as homeAssistant from './integrations/homeassistant.js';
+import * as automations from './automations.js';
 import fsp from 'node:fs/promises';
 import pathMod from 'node:path';
 
@@ -288,6 +290,60 @@ export const TOOLS = [
     },
   },
   {
+    name: 'phone_location',
+    group: 'phone',
+    description: 'Where the user\'s phone is, from Home Assistant: the zone it is in (home, not_home, or a named zone such as Work) and coordinates.',
+    schema: obj({}),
+    async run(_a, { settings }) { return homeAssistant.location(settings); },
+  },
+  {
+    name: 'notify_phone',
+    group: 'phone',
+    description: 'Send a push notification to the user\'s phone right now (Home Assistant companion app).',
+    schema: obj({ title: { type: 'string' }, message: { type: 'string' }, url: { type: 'string', description: 'Optional link to open.' } }, ['title']),
+    async run(args, { settings }) { return homeAssistant.notifyPhone(settings, args); },
+  },
+  {
+    name: 'create_automation',
+    group: 'automations',
+    description: 'Schedule or geofence a notification or a prompt. Examples: remind me at 17:00; notify me when I leave Work; every weekday at 8:00 if I am home, run "brief me". Times are local. Zones come from Home Assistant (home, or zone names like Work). Confirm the details with the user first.',
+    schema: obj({
+      name: { type: 'string' },
+      at: { type: 'string', description: 'One-off local date-time, e.g. 2026-11-03T17:00.' },
+      schedule_time: { type: 'string', description: 'Recurring time HH:MM.' },
+      schedule_days: { type: 'array', items: { type: 'integer' }, description: '0=Sun … 6=Sat. Omit for every day.' },
+      zone: { type: 'string', description: 'Zone name, e.g. home or Work.' },
+      zone_event: { type: 'string', enum: ['enter', 'leave', 'in', 'not_in'], description: 'enter/leave fire on arrival/departure; in/not_in are conditions for a scheduled time.' },
+      action: { type: 'string', enum: ['notify', 'prompt'] },
+      title: { type: 'string', description: 'Notification title.' },
+      message: { type: 'string', description: 'Notification text.' },
+      prompt: { type: 'string', description: 'For action=prompt: what to ask the assistant when it fires.' },
+    }, ['action']),
+    async run(a) {
+      const trigger = {};
+      if (a.at) trigger.at = a.at;
+      if (a.schedule_time) trigger.schedule = { time: a.schedule_time, ...(a.schedule_days?.length ? { days: a.schedule_days } : {}) };
+      if (a.zone) trigger.zone = { zone: a.zone, event: a.zone_event || 'enter' };
+      const action = a.action === 'prompt' ? { type: 'prompt', prompt: a.prompt } : { type: 'notify', title: a.title, message: a.message };
+      const r = await automations.create({ name: a.name, trigger, action });
+      return { created: true, id: r.id, summary: automations.describe(r) };
+    },
+  },
+  {
+    name: 'list_automations',
+    group: 'automations',
+    description: 'List the user\'s scheduled and location-based automations.',
+    schema: obj({}),
+    async run() { return (await automations.list()).map((r) => ({ id: r.id, name: r.name, enabled: r.enabled, summary: automations.describe(r), lastFired: r.lastFired })); },
+  },
+  {
+    name: 'delete_automation',
+    group: 'automations',
+    description: 'Delete an automation by id (from list_automations).',
+    schema: obj({ id: { type: 'string' } }, ['id']),
+    async run(a) { await automations.remove(a.id); return { deleted: true }; },
+  },
+  {
     name: 'find_people',
     group: 'people',
     description: 'Look up people in the user\'s contacts (Google Contacts, vCard files) and in the people notebook. Returns names, emails, phones, organization and saved notes. Use it to resolve "who is X" or to find an email address before drafting mail or invites.',
@@ -370,6 +426,8 @@ export async function availableTools(settings, { forClaudeCode = false, project 
   const skillList = forClaudeCode ? [] : await skills.listSkills(settings);
   const tools = TOOLS.filter((t) => {
     if (t.group === 'skills') return !forClaudeCode && skillList.length > 0; // Claude Code has its own skills
+    if (t.group === 'phone') return homeAssistant.connected(settings) && (t.name === 'phone_location' ? Boolean(settings.homeAssistant.locationEntity) : Boolean(settings.homeAssistant.notifyService));
+    if (t.group === 'automations') return true;
     if (t.group === 'sources') return feeds.parseSources(settings).length > 0;
     if (t.group === 'people') {
       const anySource = (googleStatus.contacts && settings.google.contacts) || contacts.parseSources(settings.contacts?.vcardSources).length;

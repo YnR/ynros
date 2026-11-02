@@ -5,6 +5,7 @@ import { renderSidebar, initSidebarCollapse } from './sidebar.js';
 import { initMentions } from './mentions.js';
 import { initToday, showToday } from './today.js';
 import { initSettingsExtra, applyTheme, loadMcp, fillQuota, collectQuota } from './settings-extra.js';
+import { initAutomations, fillHomeAssistant } from './automations.js';
 
 const $ = (sel) => document.querySelector(sel);
 const PROVIDER_LABEL = { anthropic: 'Claude', claudeCode: 'Claude Code', gemini: 'Gemini' };
@@ -619,6 +620,10 @@ function connectEvents() {
       }
     } else if (ev.type === 'quota') {
       refreshQuota();
+    } else if (ev.type === 'automation' && ev.status === 'notify') {
+      const n = state.settings.notifications;
+      // Automations are explicit requests: notify even when the window has focus.
+      if (n?.enabled) notify({ title: ev.title, body: ev.message || '', conversationId: ev.conversationId, onClick: () => { if (ev.conversationId) location.hash = `#/c/${ev.conversationId}`; } });
     } else if (ev.type === 'approval') {
       if (ev.status === 'pending') {
         const conv = state.conversations.find((c) => c.id === ev.conversationId);
@@ -706,7 +711,7 @@ function updateProviderStatus() {
 
 /* ---------- settings ---------- */
 
-const SECTIONS = ['anthropic', 'gemini', 'claudeCode', 'notifications', 'triage', 'google', 'calendars', 'tools', 'files', 'projects', 'contacts', 'routing', 'quota', 'appearance', 'sources'];
+const SECTIONS = ['anthropic', 'gemini', 'claudeCode', 'notifications', 'triage', 'google', 'calendars', 'tools', 'files', 'projects', 'contacts', 'routing', 'quota', 'appearance', 'sources', 'homeAssistant'];
 
 function fillSettingsForm() {
   const s = state.settings;
@@ -716,7 +721,7 @@ function fillSettingsForm() {
   for (const p of SECTIONS) {
     for (const [k, v] of Object.entries(s[p] || {})) {
       const input = form.elements[`${p}.${k}`];
-      if (!input || k === 'apiKey' || k === 'clientSecret' || (v && typeof v === 'object')) continue;
+      if (!input || k === 'apiKey' || k === 'clientSecret' || k === 'token' || (v && typeof v === 'object')) continue;
       if (input.type === 'checkbox') input.checked = Boolean(v);
       else input.value = v ?? '';
     }
@@ -742,6 +747,7 @@ function fillSettingsForm() {
   if (!s.projects.hostFolder) form.elements['projects.hostFolder'].placeholder = state.hostFolder || '~/Harness Projects';
   applyTheme(s.appearance?.theme);
   fillQuota(s);
+  fillHomeAssistant(s);
   loadMcp();
   updateNotifyState();
   loadIntegrations();
@@ -998,6 +1004,7 @@ async function init() {
   initMentions({ api, current: () => state.current, projectId: () => state.projectId });
   initToday({ api });
   initSettingsExtra({ api, save: saveSettings });
+  initAutomations({ api, save: saveSettings, collect: collectSettings });
   refreshQuota();
   window.addEventListener('hashchange', route);
   connectEvents();

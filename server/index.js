@@ -13,6 +13,8 @@ import * as mcp from './mcp/registry.js';
 import { route as routeModel, tiersFor } from './router.js';
 import { today, BRIEF_PROMPT } from './today.js';
 import * as approvals from './approvals.js';
+import * as automations from './automations.js';
+import * as homeAssistant from './integrations/homeassistant.js';
 import * as tools from './tools.js';
 import * as google from './integrations/google.js';
 import * as skillsLib from './integrations/skills.js';
@@ -238,6 +240,22 @@ function queueEvent(conv) {
   runs.hub.emit('update', ev);
 }
 
+/** Automations run prompts as new chats. */
+export function startAutomations() {
+  automations.start({
+    startConversation: async ({ prompt, provider, projectId, title }) => {
+      const settings = await loadSettings();
+      const p = PROVIDERS.includes(provider) ? provider : settings.defaultProvider;
+      const model = settings.routing?.enabled !== false ? 'auto' : settings[p]?.model || '';
+      const conv = await store.createConversation({ provider: p, model, projectId: projectId || null, title });
+      await beginTurn(conv, prompt, {});
+      conv.title = title || conv.title;
+      await store.saveConversation(conv);
+      return conv.id;
+    },
+  });
+}
+
 /** On startup, re-arm resume timers for chats waiting on a usage limit. */
 export async function rearmHolds() {
   for (const c of await store.listConversations()) {
@@ -386,6 +404,31 @@ async function route(req, res) {
   if (parts[0] !== 'api') return serveStatic(res, url.pathname);
 
   if (parts[1] === 'events' && parts.length === 2 && method === 'GET') return handleEvents(req, res);
+
+  if (parts[1] === 'automations') {
+    if (parts.length === 2 && method === 'GET') {
+      return sendJson(res, 200, (await automations.list()).map((r) => ({ ...r, summary: automations.describe(r) })));
+    }
+    if (parts.length === 2 && method === 'POST') return sendJson(res, 201, await automations.create(await readJson(req)));
+    if (parts.length === 3 && method === 'DELETE') { await automations.remove(parts[2]); return sendJson(res, 200, { ok: true }); }
+    if (parts.length === 4 && parts[3] === 'enabled' && method === 'POST') {
+      return sendJson(res, 200, await automations.setEnabled(parts[2], (await readJson(req)).enabled));
+    }
+  }
+
+  if (parts[1] === 'home-assistant') {
+    const settings = await loadSettings();
+    try {
+      if (parts[2] === 'discover' && method === 'GET') {
+        const [trackers, notify, zones] = await Promise.all([homeAssistant.trackers(settings), homeAssistant.notifyServices(settings), homeAssistant.zones(settings)]);
+        return sendJson(res, 200, { trackers, notify, zones });
+      }
+      if (parts[2] === 'test-notify' && method === 'POST') {
+        await readJson(req);
+        return sendJson(res, 200, await homeAssistant.notifyPhone(settings, { title: 'Harness', message: 'Phone notifications are working.' }));
+      }
+    } catch (e) { throw new HttpError(400, e.message); }
+  }
 
   if (parts[1] === 'today' && parts.length === 2 && method === 'GET') {
     return sendJson(res, 200, await today(await loadSettings()));
@@ -575,6 +618,9 @@ async function route(req, res) {
     }
   }
 
+  if (parts[1] === 'test' && parts[2] === 'homeAssistant' && method === 'POST') {
+    try { return sendJson(res, 200, await homeAssistant.test(await loadSettings())); } catch (e) { return sendJson(res, 200, { ok: false, message: e.message }); }
+  }
   if (parts[1] === 'test' && parts.length === 3 && method === 'POST') {
     const provider = getProvider(parts[2]);
     try {
@@ -721,5 +767,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   createServer({ port }).listen(port, host, () => {
     console.log(`Harness running at http://localhost:${port}`);
     rearmHolds().catch(() => {});
+    startAutomations();
   });
 }

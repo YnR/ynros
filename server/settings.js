@@ -7,9 +7,9 @@ const SETTINGS_FILE = () => path.join(DATA_DIR, 'settings.json');
 
 export const PROVIDERS = ['anthropic', 'gemini', 'claudeCode'];
 // Every settings section the settings page may update.
-const SECTIONS = [...PROVIDERS, 'notifications', 'google', 'calendars', 'tools', 'triage', 'files', 'projects', 'contacts', 'quota', 'routing', 'appearance', 'sources'];
+const SECTIONS = [...PROVIDERS, 'notifications', 'google', 'calendars', 'tools', 'triage', 'files', 'projects', 'contacts', 'quota', 'routing', 'appearance', 'sources', 'homeAssistant'];
 // Values that are write-only: stored, but never sent back to the browser.
-const SECRETS = { anthropic: ['apiKey'], gemini: ['apiKey'], google: ['clientSecret'] };
+const SECRETS = { anthropic: ['apiKey'], gemini: ['apiKey'], google: ['clientSecret'], homeAssistant: ['token'] };
 
 export function defaultSettings() {
   return {
@@ -43,6 +43,12 @@ export function defaultSettings() {
       // News topics (comma or line separated), fetched from Google News.
       newsTopics: '',
       newsRegion: 'en-US:US',
+    },
+    homeAssistant: {
+      url: '', // e.g. http://homeassistant.local:8123
+      token: '', // long-lived access token
+      locationEntity: '', // person.you or device_tracker.your_phone
+      notifyService: '', // notify.mobile_app_your_phone
     },
     appearance: {
       theme: 'system', // system | light | dark
@@ -166,6 +172,10 @@ export function publicSettings(settings) {
     out[p].hasKey = Boolean(key);
     out[p].keySource = source;
     out[p].keyHint = hint(key);
+  }
+  if (out.homeAssistant) {
+    out.homeAssistant.hasToken = Boolean(settings.homeAssistant.token);
+    delete out.homeAssistant.token;
   }
   if (out.google) {
     out.google.hasClientSecret = Boolean(settings.google.clientSecret);
