@@ -48,7 +48,7 @@ export function renderSidebar(container, { projects, conversations, currentId, a
   const latest = (list) => (list?.[0]?.updatedAt || '');
   const groups = projects.map((p) => ({ id: p.id, name: p.name, title: p.path, chats: byProject.get(p.id) || [] }))
     .sort((a, b) => latest(b.chats).localeCompare(latest(a.chats)) || a.name.localeCompare(b.name));
-  groups.push({ id: '', name: projects.length ? 'Other chats' : 'Chats', chats: byProject.get('') || [] });
+  groups.push({ id: '', name: 'Misc', title: 'Chats not in a project', chats: byProject.get('') || [] });
 
   const nodes = groups.map((g) => {
     const key = g.id || '_none';

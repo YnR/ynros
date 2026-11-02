@@ -79,7 +79,7 @@ export async function triage({ settings, providers, context, signal }) {
   const s = structuredClone(settings);
   s[provider].systemPrompt = SYSTEM;
   if (provider === 'anthropic') s.anthropic.maxTokens = 200;
-  if (provider === 'claudeCode') { s.claudeCode.permissionMode = 'plan'; s.claudeCode.allowedTools = ''; }
+  if (provider === 'claudeCode') { s.claudeCode.permissionMode = 'plan'; s.claudeCode.allowedTools = ''; s.claudeCode.ephemeral = true; }
 
   const content = provider === 'claudeCode'
     ? `${SYSTEM}\n\n${buildTriagePrompt(context)}`

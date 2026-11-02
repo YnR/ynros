@@ -4,7 +4,7 @@
 import { app, BrowserWindow, ipcMain, Notification, shell, nativeTheme } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createServer, startAutomations, rearmHolds } from '../server/index.js';
+import { createServer, startAutomations, rearmHolds, importHistoryOnStart } from '../server/index.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4317;
@@ -27,6 +27,7 @@ async function ensureServer() {
   });
   rearmHolds().catch(() => {});
   startAutomations();
+  importHistoryOnStart();
   return 'started';
 }
 

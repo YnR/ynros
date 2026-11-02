@@ -105,3 +105,24 @@ export async function readInstructions(project) {
   }
   return '';
 }
+
+/**
+ * Register an existing folder as a project without writing anything into it
+ * (used when importing past chats that ran in that folder). Returns the project.
+ */
+export async function registerFolder(settings, dir, { name, via } = {}) {
+  dir = path.resolve(dir);
+  const all = await listProjects(settings);
+  const known = all.find((p) => path.resolve(p.path) === dir);
+  if (known) return known;
+  const st = await fs.stat(dir).catch(() => null);
+  if (!st?.isDirectory()) return null;
+  name ||= path.basename(dir);
+  let id = slug(name);
+  for (let n = 2; all.some((p) => p.id === id); n++) id = `${slug(name)}-${n}`;
+  const project = { id, name, path: dir, createdAt: new Date().toISOString(), ...(via ? { addedBy: via } : {}) };
+  const list = await readRegistry();
+  list.push(project);
+  await writeRegistry(list);
+  return project;
+}

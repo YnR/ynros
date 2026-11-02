@@ -17,7 +17,7 @@ export async function listConversations() {
     if (!f.endsWith('.json')) continue; // skips in-flight .tmp files
     try {
       const c = JSON.parse(await fs.readFile(path.join(DIR(), f), 'utf8'));
-      out.push({ id: c.id, title: c.title, provider: c.provider, model: c.model, projectId: c.projectId || null, updatedAt: c.updatedAt });
+      out.push({ id: c.id, title: c.title, provider: c.provider, model: c.model, projectId: c.projectId || null, updatedAt: c.updatedAt, imported: c.imported?.source || null });
     } catch { /* skip corrupt file */ }
   }
   return out.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
@@ -35,8 +35,8 @@ export async function getConversation(id) {
 const writes = new Map(); // id -> promise of the last queued write
 
 /** Atomic save; writes to the same chat are serialized so they can't interleave. */
-export function saveConversation(conv) {
-  conv.updatedAt = new Date().toISOString();
+export function saveConversation(conv, { touch = true } = {}) {
+  if (touch || !conv.updatedAt) conv.updatedAt = new Date().toISOString();
   const file = fileFor(conv.id);
   const data = JSON.stringify(conv, null, 2);
   const prev = writes.get(conv.id) || Promise.resolve();

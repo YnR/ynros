@@ -8,6 +8,7 @@ import * as runs from './runs.js';
 import { triage } from './triage.js';
 import * as files from './files.js';
 import * as projects from './projects.js';
+import * as history from './history.js';
 import * as quota from './quota.js';
 import * as mcp from './mcp/registry.js';
 import { route as routeModel, tiersFor } from './router.js';
@@ -44,14 +45,14 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-async function readJson(req) {
+async function readJson(req, limit = 5_000_000) {
   if (!(req.headers['content-type'] || '').includes('application/json')) {
     throw new HttpError(415, 'Expected application/json');
   }
   let raw = '';
   for await (const chunk of req) {
     raw += chunk;
-    if (raw.length > 5_000_000) throw new HttpError(413, 'Body too large');
+    if (raw.length > limit) throw new HttpError(413, 'Body too large');
   }
   try { return raw ? JSON.parse(raw) : {}; } catch { throw new HttpError(400, 'Invalid JSON'); }
 }
@@ -238,6 +239,23 @@ function queueEvent(conv) {
   };
   runs.emitTo(conv.id, ev);
   runs.hub.emit('update', ev);
+}
+
+let lastHistoryImport = null;
+function broadcastHistory(report) {
+  if (report.added || report.updated) runs.hub.emit('update', { type: 'history', report });
+}
+
+/** Imports past Claude Code and Gemini CLI chats in the background (Settings → History). */
+export async function importHistoryOnStart() {
+  const settings = await loadSettings();
+  if (settings.history?.autoImport === false) return null;
+  try {
+    lastHistoryImport = await history.importLocal(settings);
+    broadcastHistory(lastHistoryImport);
+    if (lastHistoryImport.added) console.log(`Imported ${lastHistoryImport.added} past chats.`);
+  } catch (e) { console.warn('history import:', e.message); }
+  return lastHistoryImport;
 }
 
 /** Automations run prompts as new chats. */
@@ -430,6 +448,25 @@ async function route(req, res) {
     } catch (e) { throw new HttpError(400, e.message); }
   }
 
+  if (parts[1] === 'history') {
+    const settings = await loadSettings();
+    if (parts[2] === 'sources' && method === 'GET') {
+      return sendJson(res, 200, { ...(await history.localSources(settings)), last: lastHistoryImport });
+    }
+    if (parts[2] === 'import' && method === 'POST') {
+      const body = await readJson(req);
+      const sources = Array.isArray(body.sources) ? body.sources.filter((x) => ['claudeCode', 'geminiCli'].includes(x)) : undefined;
+      lastHistoryImport = await history.importLocal(settings, { sources, force: body.force === true });
+      broadcastHistory(lastHistoryImport);
+      return sendJson(res, 200, lastHistoryImport);
+    }
+    if (parts[2] === 'import-file' && method === 'POST') {
+      const body = await readJson(req, 300_000_000);
+      const report = await history.importExport(settings, { content: body.content, path: body.path });
+      broadcastHistory(report);
+      return sendJson(res, 200, report);
+    }
+  }
   if (parts[1] === 'today' && parts.length === 2 && method === 'GET') {
     return sendJson(res, 200, await today(await loadSettings()));
   }
@@ -663,6 +700,15 @@ async function route(req, res) {
         if (typeof body.title === 'string' && body.title.trim()) c.title = body.title.trim().slice(0, 200);
         if (PROVIDERS.includes(body.provider)) c.provider = body.provider;
         if (typeof body.model === 'string') c.model = body.model;
+        if ('projectId' in body) {
+          const p = body.projectId ? await projects.getProject(await loadSettings(), body.projectId) : null;
+          if (body.projectId && !p) throw new HttpError(400, 'Unknown project');
+          if ((c.projectId || null) !== (p?.id || null)) {
+            c.projectId = p?.id || null;
+            c.projectMoved = true; // a later history import keeps this choice
+          }
+        }
+        if (typeof body.title === 'string') c.titleEdited = true;
         return sendJson(res, 200, await store.saveConversation(c));
       }
       if (method === 'DELETE') {
@@ -768,5 +814,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     console.log(`Harness running at http://localhost:${port}`);
     rearmHolds().catch(() => {});
     startAutomations();
+    importHistoryOnStart();
   });
 }

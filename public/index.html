@@ -43,6 +43,7 @@
           <button class="btn ghost icon" id="toggle-sidebar" aria-label="Toggle sidebar">☰</button>
           <h1 id="chat-title">New chat</h1>
           <span class="project-badge" id="chat-project" hidden></span>
+          <select class="project-move" id="move-chat" aria-label="Project for this chat" title="Move this chat to another project" hidden></select>
           <button class="btn ghost small" id="rename-chat" hidden>Rename</button>
           <button class="btn ghost small danger" id="delete-chat" hidden>Delete</button>
         </header>
@@ -381,6 +382,31 @@
               <input name="projects.hostFolder" placeholder="~/Harness Projects">
               <small class="muted">Each project is a folder with a <code>CLAUDE.md</code> for instructions and an <code>outputs/</code> folder.</small>
             </label>
+          </fieldset>
+
+          <fieldset class="card" id="history-card">
+            <legend>Past chats</legend>
+            <p class="muted">Brings in chats you had before. Each one goes into the project whose folder it ran in, or whose name it mentions; the rest go under <b>Misc</b>. Re-importing only adds what's new, and a chat you move to another project stays there.</p>
+            <label class="check"><input type="checkbox" name="history.autoImport"> Import Claude Code and Gemini CLI chats from this computer when the app starts</label>
+            <label class="check"><input type="checkbox" name="history.createProjects"> Add the folders those chats ran in as projects (nothing is written into them)</label>
+            <div class="row-actions">
+              <button class="btn small" type="button" id="history-import">Import from this computer now</button>
+              <span class="muted small" id="history-local"></span>
+            </div>
+            <label class="field">
+              <span>claude.ai or Gemini export</span>
+              <input type="file" id="history-file" accept=".json,application/json">
+              <small class="muted">claude.ai: Settings → Privacy → Export data, then pick <code>conversations.json</code>. Gemini: Google Takeout → My Activity (format JSON) → Gemini Apps, then pick <code>MyActivity.json</code>. Or paste the path to an unzipped export folder:</small>
+            </label>
+            <div class="row-actions">
+              <input id="history-path" placeholder="~/Downloads/data-export" style="flex:1">
+              <button class="btn small" type="button" id="history-import-path">Import folder</button>
+            </div>
+            <details class="small"><summary>History folders</summary>
+              <label class="field"><span>Claude Code transcripts</span><input name="history.claudeCodeDir" placeholder="~/.claude/projects"></label>
+              <label class="field"><span>Gemini CLI chats</span><input name="history.geminiDir" placeholder="~/.gemini/tmp"></label>
+            </details>
+            <p class="muted small" id="history-report" aria-live="polite"></p>
           </fieldset>
 
           <fieldset class="card" id="ha-card">

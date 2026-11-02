@@ -18,6 +18,8 @@ export function buildArgs({ settings, model, sessionId, mcpConfig }) {
   const m = model ?? cfg.model;
   if (m) args.push('--model', m);
   if (sessionId) args.push('--resume', sessionId);
+  // Helper calls (triage, routing) leave no transcript behind in ~/.claude/projects.
+  if (cfg.ephemeral) args.push('--no-session-persistence');
   if (cfg.permissionMode) args.push('--permission-mode', cfg.permissionMode);
   if (cfg.chrome) args.push('--chrome');
   if (cfg.askInChat !== false && mcpConfig?.mcpServers?.harness) {

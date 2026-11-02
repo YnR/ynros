@@ -16,6 +16,8 @@ async function runOptions(settings, providerName, conv) {
   const project = await getProject(settings, conv.projectId);
   const out = {};
   if (project) out.cwd = project.path; // Claude Code reads CLAUDE.md from its working folder itself
+  // An imported Claude Code session can only be resumed from the folder it ran in.
+  if (isCC && conv.claudeCodeSessionId && conv.cwd) out.cwd = conv.cwd;
   const { tools, skills } = await availableTools(settings, { forClaudeCode: isCC, project });
   if (isCC) {
     const servers = await claudeCodeServers().catch(() => ({}));

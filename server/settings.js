@@ -44,6 +44,14 @@ export function defaultSettings() {
       newsTopics: '',
       newsRegion: 'en-US:US',
     },
+    history: {
+      // Import past Claude Code and Gemini CLI chats from this computer when the app starts.
+      autoImport: true,
+      // Register the folders those chats ran in as projects (nothing is written into them).
+      createProjects: true,
+      claudeCodeDir: '', // default ~/.claude/projects
+      geminiDir: '', // default ~/.gemini/tmp
+    },
     homeAssistant: {
       url: '', // e.g. http://homeassistant.local:8123
       token: '', // long-lived access token

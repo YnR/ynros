@@ -6,6 +6,7 @@ import { initMentions } from './mentions.js';
 import { initToday, showToday } from './today.js';
 import { initSettingsExtra, applyTheme, loadMcp, fillQuota, collectQuota } from './settings-extra.js';
 import { initAutomations, fillHomeAssistant } from './automations.js';
+import { initHistory } from './history.js';
 
 const $ = (sel) => document.querySelector(sel);
 const PROVIDER_LABEL = { anthropic: 'Claude', claudeCode: 'Claude Code', gemini: 'Gemini' };
@@ -86,9 +87,35 @@ function projectName(id) {
 
 function showProjectBadge(id) {
   const badge = $('#chat-project');
+  const move = $('#move-chat');
   const name = projectName(id);
-  badge.hidden = !name;
-  badge.textContent = name ? `📁 ${name}` : '';
+  // An open chat gets a picker to move it between projects; a new chat just shows where it will go.
+  if (state.current) {
+    badge.hidden = true;
+    move.hidden = false;
+    move.replaceChildren(
+      new Option('📁 Misc', ''),
+      ...state.projects.map((p) => new Option(`📁 ${p.name}`, p.id)),
+    );
+    move.value = state.projects.some((p) => p.id === id) ? id : '';
+  } else {
+    move.hidden = true;
+    badge.hidden = !name;
+    badge.textContent = name ? `📁 ${name}` : '';
+  }
+}
+
+async function moveChat(projectId) {
+  if (!state.current) return;
+  try {
+    const c = await api(`/api/conversations/${state.current.id}`, { method: 'PATCH', body: { projectId: projectId || null } });
+    state.current.projectId = c.projectId;
+    state.projectId = c.projectId;
+    refreshList();
+  } catch (e) {
+    alert(e.message);
+    showProjectBadge(state.current.projectId);
+  }
 }
 
 function setComposer(provider, model) {
@@ -620,6 +647,8 @@ function connectEvents() {
       }
     } else if (ev.type === 'quota') {
       refreshQuota();
+    } else if (ev.type === 'history') {
+      refreshList();
     } else if (ev.type === 'automation' && ev.status === 'notify') {
       const n = state.settings.notifications;
       // Automations are explicit requests: notify even when the window has focus.
@@ -711,7 +740,7 @@ function updateProviderStatus() {
 
 /* ---------- settings ---------- */
 
-const SECTIONS = ['anthropic', 'gemini', 'claudeCode', 'notifications', 'triage', 'google', 'calendars', 'tools', 'files', 'projects', 'contacts', 'routing', 'quota', 'appearance', 'sources', 'homeAssistant'];
+const SECTIONS = ['history', 'anthropic', 'gemini', 'claudeCode', 'notifications', 'triage', 'google', 'calendars', 'tools', 'files', 'projects', 'contacts', 'routing', 'quota', 'appearance', 'sources', 'homeAssistant'];
 
 function fillSettingsForm() {
   const s = state.settings;
@@ -1005,6 +1034,8 @@ async function init() {
   initToday({ api });
   initSettingsExtra({ api, save: saveSettings });
   initAutomations({ api, save: saveSettings, collect: collectSettings });
+  initHistory({ api, refreshList });
+  $('#move-chat').addEventListener('change', (e) => moveChat(e.target.value));
   refreshQuota();
   window.addEventListener('hashchange', route);
   connectEvents();

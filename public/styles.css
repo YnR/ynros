@@ -288,6 +288,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid color-mix(in srgb
 .group-more { background: none; border: 0; color: var(--muted); font: inherit; font-size: 0.8rem; padding: 4px 10px; text-align: left; cursor: pointer; }
 .group-more:hover { color: var(--text); }
 .group-empty { color: var(--muted); font-size: 0.8rem; padding: 4px 10px; }
+.project-move { font-size: 0.75rem; padding: 2px 6px; border-radius: 999px; max-width: 14rem; }
 .project-badge { font-size: 0.75rem; padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--text); white-space: nowrap; }
 
 /* ---------- composer extras ---------- */
@@ -348,3 +349,5 @@ input:focus, select:focus, textarea:focus { outline: 2px solid color-mix(in srgb
 .approval code { overflow-wrap: anywhere; }
 .approval .grow { flex: 1 1 260px; min-width: 0; }
 .approval.done { border-color: var(--border); background: transparent; color: var(--muted); }
+.row-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+.row-actions input { min-width: 0; }

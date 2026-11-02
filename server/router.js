@@ -61,7 +61,7 @@ export async function route({ settings, providers, conv, provider, text }) {
   const s = structuredClone(settings);
   s[rp].systemPrompt = SYSTEM;
   if (rp === 'anthropic') s.anthropic.maxTokens = 150;
-  if (rp === 'claudeCode') { s.claudeCode.permissionMode = 'plan'; s.claudeCode.allowedTools = ''; }
+  if (rp === 'claudeCode') { s.claudeCode.permissionMode = 'plan'; s.claudeCode.allowedTools = ''; s.claudeCode.ephemeral = true; }
   const prompt = `${brief(conv)}\n\nNew message:\n${text.slice(0, 2000)}`;
   const content = rp === 'claudeCode' ? `${SYSTEM}\n\n${prompt}` : prompt;
   let out = '';

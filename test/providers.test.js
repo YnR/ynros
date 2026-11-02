@@ -243,3 +243,12 @@ test('claudeCode: skills show as a skill event carrying the injected text', asyn
   assert.equal(events.filter((e) => e.type === 'tool_result').length, 0, '"Launching skill" is not shown');
   assert.equal(events.filter((e) => e.type === 'text').map((e) => e.text).join(''), 'Hi!');
 });
+
+test('helper calls through Claude Code do not save a transcript', async () => {
+  const { buildArgs } = await import('../server/providers/claudeCode.js');
+  const { defaultSettings } = await import('../server/settings.js');
+  const s = defaultSettings();
+  assert.ok(!buildArgs({ settings: s }).includes('--no-session-persistence'));
+  s.claudeCode.ephemeral = true;
+  assert.ok(buildArgs({ settings: s }).includes('--no-session-persistence'));
+});
