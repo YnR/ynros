@@ -15,6 +15,8 @@ npm run desktop    # same app in an Electron window, with native notifications
 npm test
 ```
 
+If npm skipped Electron's download during install, `npm run desktop` fetches it the first time it runs.
+
 Then open **Settings** to connect providers. Everything you enter is stored only on this
 computer in `~/.ynros-harness` (override with `HARNESS_DATA_DIR`). API keys, OAuth tokens and
 the Home Assistant token are never sent back to the browser.

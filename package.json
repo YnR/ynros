@@ -13,7 +13,7 @@
     "start": "node server/index.js",
     "predev": "npm run build",
     "dev": "node --watch server/index.js",
-    "predesktop": "npm run build",
+    "predesktop": "npm run build && node scripts/ensure-electron.mjs",
     "desktop": "electron electron/main.mjs",
     "test": "node --test test/*.test.js"
   },
