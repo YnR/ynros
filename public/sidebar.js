@@ -12,9 +12,11 @@ function el(tag, cls, text) {
   return e;
 }
 
-function chatLink(c, { currentId, activeRuns }) {
-  const a = el('a', `conv-item${currentId === c.id ? ' active' : ''}`);
+function chatLink(c, { currentId, activeRuns, onSolo }) {
+  const a = el('a', `conv-item${currentId === c.id ? ' active' : ''}${c.unread && currentId !== c.id ? ' unread' : ''}`);
   a.href = `#/c/${c.id}`;
+  // Shift-click opens the chat alone in a second window.
+  a.addEventListener('click', (e) => { if (e.shiftKey && onSolo) { e.preventDefault(); onSolo(`#/c/${c.id}`); } });
   const run = activeRuns.get(c.id);
   if (run) {
     a.append(el('span', 'spinner'));
@@ -28,7 +30,10 @@ function chatLink(c, { currentId, activeRuns }) {
   } else {
     a.append(el('span', 'conv-title', c.title || 'New chat'));
   }
-  if (c.needsYou) a.append(el('span', 'run-badge', '●'));
+  // Working (spinner) vs. waiting for you (approval) vs. a reply you haven't seen.
+  if (c.needsYou) { const b = el('span', 'state-badge needs-you', 'needs you'); b.title = 'Waiting for your approval'; a.append(b); }
+  else if (c.unread && currentId !== c.id && !run) { const d = el('span', 'unread-dot'); d.title = 'New reply'; a.append(d); }
+  if (c.liveInTerminal) { const t = el('span', 'state-badge terminal', 'terminal'); t.title = 'This session is running in a terminal right now'; a.append(t); }
   const model = c.model === 'auto' ? 'auto' : c.model;
   a.append(el('small', null, [PROVIDER_LABEL[c.provider], model].filter(Boolean).join(' · ')));
   return a;
@@ -38,7 +43,7 @@ function chatLink(c, { currentId, activeRuns }) {
  * groups: [{ id, name, chats }] where id is a project id or '' for no project.
  * onNew(projectId) starts a chat in that group.
  */
-export function renderSidebar(container, { projects, conversations, currentId, activeRuns, onNew }) {
+export function renderSidebar(container, { projects, conversations, currentId, activeRuns, onNew, onSolo, perGroup = 5 }) {
   const byProject = new Map();
   for (const c of conversations) {
     const k = c.projectId && projects.some((p) => p.id === c.projectId) ? c.projectId : '';
@@ -52,16 +57,23 @@ export function renderSidebar(container, { projects, conversations, currentId, a
 
   const nodes = groups.map((g) => {
     const key = g.id || '_none';
-    const wrap = el('section', `group${prefs.collapsed[key] ? ' collapsed' : ''}`);
+    // Groups start collapsed (the open chat's group, and groups with activity, open up).
+    const hasCurrent = g.chats.some((c) => c.id === currentId);
+    const busy = g.chats.some((c) => activeRuns.has(c.id) || c.needsYou);
+    if (prefs.collapsed[key] === undefined) prefs.collapsed[key] = !(hasCurrent || busy);
+    const collapsed = prefs.collapsed[key] && !hasCurrent;
+    const wrap = el('section', `group${collapsed ? ' collapsed' : ''}`);
     const head = el('div', 'group-head');
     const toggle = el('button', 'group-toggle');
     toggle.type = 'button';
     toggle.title = g.title || '';
-    toggle.setAttribute('aria-expanded', String(!prefs.collapsed[key]));
+    toggle.setAttribute('aria-expanded', String(!collapsed));
     const running = g.chats.filter((c) => activeRuns.has(c.id)).length;
-    toggle.append(el('span', 'chev', '▾'), el('span', 'gname', g.name), el('span', 'group-count', running ? `${running} working` : String(g.chats.length || '')));
+    const unread = g.chats.filter((c) => c.unread && c.id !== currentId).length;
+    toggle.append(el('span', 'chev', '▾'), el('span', 'gname', `📁 ${g.name}`), el('span', 'group-count', running ? `${running} working` : unread ? `${unread} new` : String(g.chats.length || '')));
+    if (unread) toggle.classList.add('has-unread');
     toggle.addEventListener('click', () => {
-      prefs.collapsed[key] = !prefs.collapsed[key];
+      prefs.collapsed[key] = !wrap.classList.contains('collapsed');
       savePrefs();
       wrap.classList.toggle('collapsed', prefs.collapsed[key]);
       toggle.setAttribute('aria-expanded', String(!prefs.collapsed[key]));
@@ -74,19 +86,19 @@ export function renderSidebar(container, { projects, conversations, currentId, a
 
     const body = el('div', 'group-body');
     const expanded = prefs.expanded[key];
-    let shown = expanded ? g.chats : g.chats.slice(0, 3);
+    let shown = expanded ? g.chats : g.chats.slice(0, perGroup);
     // Keep the open chat visible even when it is older than the top 3.
     const cur = g.chats.find((c) => c.id === currentId);
     if (cur && !shown.includes(cur)) shown = [...shown, cur];
-    for (const c of shown) body.append(chatLink(c, { currentId, activeRuns }));
+    for (const c of shown) body.append(chatLink(c, { currentId, activeRuns, onSolo }));
     if (!g.chats.length) body.append(el('div', 'group-empty', 'No chats yet'));
-    if (g.chats.length > 3) {
-      const more = el('button', 'group-more', expanded ? 'Show less' : `Show ${g.chats.length - 3} more`);
+    if (g.chats.length > perGroup) {
+      const more = el('button', 'group-more', expanded ? 'Show less' : `Show ${g.chats.length - perGroup} more`);
       more.type = 'button';
       more.addEventListener('click', () => {
         prefs.expanded[key] = !expanded;
         savePrefs();
-        renderSidebar(container, { projects, conversations, currentId, activeRuns, onNew });
+        renderSidebar(container, { projects, conversations, currentId, activeRuns, onNew, onSolo, perGroup });
       });
       body.append(more);
     }

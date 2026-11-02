@@ -111,7 +111,107 @@ function recentCard(t) {
   return c;
 }
 
-export async function showToday() {
+/* ---------- News tab ---------- */
+
+// Topic pills run blue → yellow and source pills purple → orange; each name keeps its color.
+// Ten shades per family leave room for new sources.
+const TOPIC_HUES = [215, 205, 195, 185, 170, 150, 120, 90, 65, 50];
+const SOURCE_HUES = [275, 290, 305, 320, 335, 350, 5, 15, 25, 35];
+function hueFor(name, hues) {
+  let h = 0;
+  for (const ch of String(name).toLowerCase()) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+  return hues[h % hues.length];
+}
+function pill(text, kind) {
+  const p = el('span', `pill-tag ${kind}`, text);
+  p.style.setProperty('--h', hueFor(text, kind === 'topic' ? TOPIC_HUES : SOURCE_HUES));
+  return p;
+}
+
+let newsItems = [];
+let newsFilter = 'all';
+
+function renderNews() {
+  const box = $('#news-body');
+  const unread = newsItems.filter((i) => !i.read).length;
+  const count = $('#news-count');
+  count.hidden = !unread;
+  count.textContent = String(unread);
+  window.harnessSetNewsFlag?.(unread);
+  const bar = el('div', 'news-bar');
+  const seg = el('div', 'seg');
+  for (const [k, label] of [['all', 'All'], ['unread', `New (${unread})`]]) {
+    const b = el('button', newsFilter === k ? 'on' : '', label);
+    b.type = 'button';
+    b.addEventListener('click', () => { newsFilter = k; renderNews(); });
+    seg.append(b);
+  }
+  const all = el('button', 'btn ghost small', 'Mark all read');
+  all.type = 'button';
+  all.disabled = !unread;
+  all.addEventListener('click', () => mark(newsItems.filter((i) => !i.read), true));
+  bar.append(seg, all);
+  const list = newsFilter === 'unread' ? newsItems.filter((i) => !i.read) : newsItems;
+  const grid = el('div', 'news-grid');
+  for (const it of list) {
+    const c = el('article', `news-card${it.read ? '' : ' unread'}`);
+    const pills = el('div', 'pills');
+    pills.append(pill(it.source || it.feed, 'source'));
+    for (const t of it.tags || []) pills.append(pill(t, 'topic'));
+    const a = Object.assign(el('a', 'news-title', it.title || '(untitled)'), { href: it.link, target: '_blank', rel: 'noopener noreferrer' });
+    a.addEventListener('click', () => { if (!it.read) mark([it], true); });
+    const foot = el('div', 'news-foot');
+    foot.append(el('span', 'muted small', it.date ? new Date(it.date).toLocaleDateString([], { month: 'short', day: 'numeric' }) : ''));
+    const t = el('button', 'btn ghost tiny', it.read ? 'Mark unread' : 'Mark read');
+    t.type = 'button';
+    t.addEventListener('click', () => mark([it], !it.read));
+    foot.append(t);
+    c.append(pills, a);
+    if (it.summary) c.append(el('p', 'news-summary', it.summary.slice(0, 220)));
+    c.append(foot);
+    grid.append(c);
+  }
+  if (!list.length) grid.append(el('p', 'today-empty', newsItems.length ? 'No new articles.' : 'Add feeds or news topics under Settings → Sources for Today (for example https://ynr.github.io/uxr-digest/feed.xml).'));
+  box.replaceChildren(bar, grid);
+}
+
+async function mark(items, read) {
+  for (const i of items) i.read = read;
+  renderNews();
+  try { await ctx.api('/api/news/read', { method: 'POST', body: { ids: items.map((i) => i.id), read } }); } catch { /* retry on next load */ }
+}
+
+export async function showNews() {
+  const box = $('#news-body');
+  if (!newsItems.length) box.replaceChildren(el('p', 'muted', 'Loading…'));
+  try {
+    const r = await ctx.api('/api/news');
+    newsItems = r.items;
+    renderNews();
+    if (r.errors?.length) box.append(el('p', 'today-empty', `Some sources failed: ${r.errors.join('; ')}`));
+  } catch (e) { box.replaceChildren(el('p', 'muted', e.message)); }
+}
+
+let tab = 'today';
+try { tab = localStorage.getItem('harness-home-tab') || 'today'; } catch { /* ignore */ }
+
+function setTab(t) {
+  tab = t;
+  try { localStorage.setItem('harness-home-tab', t); } catch { /* ignore */ }
+  for (const b of document.querySelectorAll('[data-today-tab]')) {
+    const on = b.dataset.todayTab === t;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-selected', String(on));
+  }
+  $('#today-body').hidden = t !== 'today';
+  $('#news-body').hidden = t !== 'news';
+  $('#today-brief').hidden = t !== 'today';
+  if (t === 'news') showNews(); else showTodayCards();
+}
+
+export function showToday() { setTab(tab); }
+
+async function showTodayCards() {
   const body = $('#today-body');
   $('#today-title').textContent = new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
   try {
@@ -125,6 +225,7 @@ export async function showToday() {
 export function initToday(c) {
   ctx = c;
   $('#today-refresh').addEventListener('click', showToday);
+  for (const b of document.querySelectorAll('[data-today-tab]')) b.addEventListener('click', () => setTab(b.dataset.todayTab));
   $('#today-brief').addEventListener('click', async () => {
     const b = $('#today-brief');
     b.disabled = true;

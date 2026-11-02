@@ -193,7 +193,12 @@ export function startRun({ conv, provider, providerName, model, settings, onFini
           hub.emit('update', { type: 'quota', provider: providerName, ...st });
           continue;
         } else if (ev.type === 'meta') {
-          if (ev.sessionId) { conv.claudeCodeSessionId = ev.sessionId; delete conv.forkSession; }
+          if (ev.sessionId && ev.sessionId !== conv.claudeCodeSessionId) {
+            conv.claudeCodeSessionId = ev.sessionId;
+            delete conv.forkSession;
+            // Save now so the history import knows this session belongs to a harness chat.
+            store.saveConversation(conv).catch(() => {});
+          }
           if (ev.usage) { assistant.usage = ev.usage; quota.record(providerName, ev.usage); }
           if (ev.costUsd != null) assistant.costUsd = ev.costUsd;
           if (ev.model && !assistant.model) assistant.model = ev.model;

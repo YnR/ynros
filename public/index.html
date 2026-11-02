@@ -22,6 +22,7 @@
         <button class="btn ghost small" id="project-new" type="button" title="New project">+ Project</button>
       </div>
       <nav class="conv-list" id="conv-list" aria-label="Conversations"></nav>
+      <a class="nav-link" href="#/c" id="conversations-link">💬 Conversations</a>
       <a class="nav-link" href="#/" id="today-link">☀ Today</a>
       <a class="nav-link" href="#/files" id="files-link">📝 Files</a>
       <a class="nav-link" href="#/settings" id="settings-link">⚙ Settings</a>
@@ -34,11 +35,18 @@
           <h1 id="today-title">Today</h1>
           <button class="btn primary small" id="today-brief" type="button">Brief me</button>
           <button class="btn ghost small" id="today-refresh" type="button">Refresh</button>
+          <a class="btn ghost icon gear" href="#/settings" title="Settings" aria-label="Settings">⚙</a>
         </header>
+        <div class="seg today-tabs" role="tablist" aria-label="Home sections">
+          <button type="button" role="tab" data-today-tab="today" class="on" aria-selected="true">Today</button>
+          <button type="button" role="tab" data-today-tab="news" aria-selected="false">News <span class="tab-count" id="news-count" hidden></span></button>
+        </div>
         <div class="today" id="today-body"><p class="muted">Loading…</p></div>
+        <div class="news" id="news-body" hidden></div>
       </section>
 
       <section id="chat-view" class="view" hidden>
+        <nav class="tabs" id="tabs" aria-label="Open conversations" hidden></nav>
         <header class="chat-head">
           <button class="btn ghost icon" id="toggle-sidebar" aria-label="Toggle sidebar">☰</button>
           <h1 id="chat-title">New chat</h1>
@@ -46,11 +54,13 @@
           <select class="project-move" id="move-chat" aria-label="Project for this chat" title="Move this chat to another project" hidden></select>
           <button class="btn ghost small" id="rename-chat" hidden>Rename</button>
           <button class="btn ghost small danger" id="delete-chat" hidden>Delete</button>
+          <a class="btn ghost icon gear" href="#/settings" title="Settings" aria-label="Settings">⚙</a>
         </header>
         <section class="subagents" id="subagents" hidden aria-live="polite">
           <button class="subagents-head" id="subagents-toggle" type="button" aria-expanded="true">
-            <span id="subagents-summary">Subagents</span><span class="chev">▾</span>
+            <span id="subagents-summary">Subagents</span><progress id="subagents-progress" max="1" value="0" hidden></progress><span class="chev">▾</span>
           </button>
+          <button class="btn ghost icon subagents-x" id="subagents-dismiss" type="button" title="Dismiss finished subagents" aria-label="Dismiss finished subagents" hidden>✕</button>
           <ul class="subagent-list" id="subagent-list"></ul>
         </section>
         <div class="messages" id="messages">
@@ -72,12 +82,14 @@
             <datalist id="model-options"></datalist>
             <span class="status-dot" id="provider-status" title=""></span>
           </div>
+          <div class="attach-tray" id="attach-tray" hidden></div>
           <div class="composer-row">
-            <button class="btn ghost icon" id="attach" type="button" title="Mention a file (or type @)" aria-label="Mention a file">📎</button>
+            <button class="btn ghost icon" id="attach" type="button" title="Attach files (or type @)" aria-label="Attach files">📎</button>
             <div class="input-wrap">
               <textarea id="input" rows="1" placeholder="Message… (Enter to send, Shift+Enter for a new line)"></textarea>
               <div class="mention-pop" id="mention-pop" role="listbox" hidden></div>
             </div>
+            <span class="context-donut" id="context-donut" role="img" hidden></span>
             <button class="btn primary" id="send" type="submit">Send</button>
             <span class="running-label" id="running-label" hidden>Working…</span>
             <button class="btn" id="stop" type="button" hidden>Stop</button>
@@ -378,10 +390,41 @@
           <fieldset class="card">
             <legend>Projects</legend>
             <label class="field">
-              <span>Default folder for new projects</span>
-              <input name="projects.hostFolder" placeholder="~/Harness Projects">
-              <small class="muted">Each project is a folder with a <code>CLAUDE.md</code> for instructions and an <code>outputs/</code> folder.</small>
+              <span>Projects folder</span>
+              <input name="projects.hostFolder" placeholder="~/src">
+              <small class="muted">New projects are created here. Folders already in it show up as projects when they are a git repo or have a <code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>GEMINI.md</code> or <code>.claude</code> folder.</small>
             </label>
+            <label class="field"><span>Chats shown per project</span><input type="number" min="1" max="50" name="projects.chatsPerGroup"></label>
+            <div class="row-actions">
+              <input id="why-path" placeholder="Why isn't this folder listed? e.g. ~/src/uxr-tools" style="flex:1">
+              <button class="btn small" type="button" id="why-check">Check</button>
+            </div>
+            <p class="muted small" id="why-result" aria-live="polite"></p>
+          </fieldset>
+
+          <fieldset class="card" id="permissions-card">
+            <legend>Permissions</legend>
+            <p class="muted">When Claude Code asks for permission, the chat shows <b>Allow</b>, <b>Always allow</b> and <b>Deny</b>. "Always allow" adds a rule for that project. Destructive commands are never allowed automatically; they always ask.</p>
+            <label class="check"><input type="checkbox" name="permissions.safeGit"> Allow non-destructive git commands without asking (status, diff, log, show, fetch, add, commit, new branches). Push, reset, rebase and anything with --force still ask.</label>
+            <h3 class="small">Always-allow rules</h3>
+            <div id="perm-rules" class="perm-list"></div>
+            <div class="row-actions">
+              <select id="perm-scope" aria-label="Project for the rule"></select>
+              <input id="perm-rule" placeholder="Bash(npm run build:*)" style="flex:1">
+              <button class="btn small" type="button" id="perm-add">Add rule</button>
+            </div>
+            <h3 class="small">Suggestions from the last 2 weeks</h3>
+            <p class="muted small">Read-only actions you were asked about, grouped by project.</p>
+            <div id="perm-suggestions" class="perm-list"></div>
+          </fieldset>
+
+          <fieldset class="card" id="desktop-card" hidden>
+            <legend>Desktop app</legend>
+            <label class="check"><input type="checkbox" name="desktop.openAtLogin"> Open the app when I log in</label>
+            <div class="row-actions">
+              <button class="btn small" type="button" id="restart-idle">Restart when chats finish</button>
+              <span class="muted small" id="app-version"></span>
+            </div>
           </fieldset>
 
           <fieldset class="card" id="history-card">
@@ -509,6 +552,18 @@
       <div class="muted small" id="picker-root"></div>
       <div id="picker-list" class="picker-list"></div>
     </div>
+  </dialog>
+
+  <dialog id="artifact" class="modal artifact-modal">
+    <form method="dialog" class="modal-head">
+      <h2 id="artifact-title"></h2>
+      <button class="btn ghost small" type="button" id="artifact-copy">Copy path</button>
+      <button class="btn ghost small" type="button" id="artifact-open">Open in a tab</button>
+      <button class="btn ghost icon" value="close" aria-label="Close">✕</button>
+    </form>
+    <div class="modal-sub muted small" id="artifact-path"></div>
+    <iframe id="artifact-frame" title="Artifact preview" sandbox="allow-scripts allow-popups" hidden></iframe>
+    <div class="modal-body md-view" id="artifact-md" hidden></div>
   </dialog>
 
   <dialog id="modal" class="modal">

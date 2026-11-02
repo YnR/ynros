@@ -7,6 +7,11 @@ import { initToday, showToday } from './today.js';
 import { initSettingsExtra, applyTheme, loadMcp, fillQuota, collectQuota } from './settings-extra.js';
 import { initAutomations, fillHomeAssistant } from './automations.js';
 import { initHistory } from './history.js';
+import {
+  initChatExtras, enhanceBody, userBody, userActions, imageStrip, artifactChips, artifactChip, attachTurnMenu,
+  renderDonut, resetHistory, pending as composerPending, clearTray, openTab, renderTabs, lastTab,
+} from './chat-extras.js';
+import { initPermissions } from './permissions.js';
 
 const $ = (sel) => document.querySelector(sel);
 const PROVIDER_LABEL = { anthropic: 'Claude', claudeCode: 'Claude Code', gemini: 'Gemini' };
@@ -71,8 +76,33 @@ async function refreshList() {
   renderList();
 }
 
+/** Unread replies and chats waiting for an answer: window title, dock badge, sidebar. */
+function updateBadge() {
+  const n = state.conversations.filter((c) => (c.unread && c.id !== visibleChatId()) || c.needsYou).length;
+  document.title = n ? `(${n}) Harness` : 'Harness';
+  window.harnessDesktop?.setBadge?.(n);
+}
+const visibleChatId = () => (document.visibilityState === 'visible' && document.body.dataset.view === 'chat' ? state.current?.id : null);
+
+/** Marks the open chat as read once its reply is on screen. */
+async function markRead() {
+  const c = state.current;
+  if (!c?.id || c.running || visibleChatId() !== c.id) return;
+  const entry = state.conversations.find((x) => x.id === c.id);
+  if (entry && !entry.unread) return;
+  try {
+    await api(`/api/conversations/${c.id}/read`, { method: 'POST', body: {} });
+    if (entry) entry.unread = false;
+    renderList();
+  } catch { /* offline */ }
+}
+
 function renderList() {
+  renderTabs();
+  updateBadge();
   renderSidebar($('#conv-list'), {
+    perGroup: state.settings?.projects?.chatsPerGroup || 5,
+    onSolo: (href) => openSolo(href),
     projects: state.projects,
     conversations: state.conversations,
     currentId: state.current?.id,
@@ -142,6 +172,7 @@ function newChat(projectId = null) {
   const p = state.settings.defaultProvider;
   setComposer(p, defaultModel(p));
   renderAll();
+  clearTray();
   $('#chat-title').textContent = 'New chat';
   $('#rename-chat').hidden = $('#delete-chat').hidden = true;
   refreshList();
@@ -161,14 +192,19 @@ async function openConversation(id) {
   showProjectBadge(state.current.projectId);
   $('#chat-title').textContent = state.current.title;
   $('#rename-chat').hidden = $('#delete-chat').hidden = false;
+  openTab(id);
+  resetHistory();
+  clearTray();
   renderAll();
   renderList();
   if (state.current.running) attachStream(state.current);
+  else markRead();
 }
 
 /* ---------- rendering ---------- */
 
 function toolNode(ev) {
+  if (ev.type === 'notice') return el('div', `notice ${ev.kind || ''}`, ev.text);
   const d = el('details', 'tool');
   const s = el('summary');
   if (ev.type === 'tool') {
@@ -212,8 +248,13 @@ function upsertSkill(container, ev) {
   else container.append(skillNode(ev));
 }
 
-function messageNode(m) {
-  const wrap = el('div', `msg ${m.role}`);
+function messageNode(m, index = -1, { cleared = false } = {}) {
+  if (m.role === 'system') {
+    const n = el('div', `divider ${m.kind || ''}`, m.kind === 'clear' ? 'Context cleared with /clear. The model does not see the turns above.' : (m.text || ''));
+    return n;
+  }
+  const wrap = el('div', `msg ${m.role}${cleared ? ' cleared' : ''}`);
+  if (index >= 0) { wrap.dataset.index = String(index); attachTurnMenu(wrap, index); }
   const who = m.role === 'user'
     ? (m.batch ? `You · ${m.batch.length} queued messages` : 'You')
     : [PROVIDER_LABEL[m.provider] || 'Assistant', m.model].filter(Boolean).join(' · ');
@@ -226,6 +267,7 @@ function messageNode(m) {
     m.attachments.forEach((a) => at.append(el('span', 'attachment', `@${a}`)));
     wrap.append(at);
   }
+  if (m.images?.length) wrap.append(imageStrip(m.images));
   const tools = el('div', 'tools');
   for (const ev of m.events || []) {
     if (ev.type === 'skill') upsertSkill(tools, ev);
@@ -237,28 +279,57 @@ function messageNode(m) {
     const ol = el('ol', 'batch');
     m.batch.forEach((t) => ol.append(el('li', null, t)));
     body.append(ol);
-  } else if (m.role === 'user') body.textContent = m.content;
-  else body.innerHTML = renderMarkdown(m.content);
-  wrap.append(body);
+    wrap.append(body);
+  } else if (m.role === 'user') {
+    wrap.append(body);
+    userBody(body, m.content);
+  } else {
+    body.innerHTML = renderMarkdown(m.content);
+    enhanceBody(body);
+    wrap.append(body);
+  }
+  const arts = artifactChips(m.events);
+  if (arts) wrap.append(arts);
   if (m.error) wrap.append(el('div', 'error', m.error));
   const meta = [];
   if (m.stopped) meta.push('stopped');
   if (m.usage?.input != null) meta.push(`${m.usage.input} in / ${m.usage.output ?? 0} out tokens`);
-  if (m.costUsd != null) meta.push(`$${m.costUsd.toFixed(4)}`);
-  if (meta.length) wrap.append(el('div', 'meta', meta.join(' · ')));
+  // Claude Code reports the cost of each turn (one CLI run), not a running total.
+  if (m.costUsd != null) meta.push(`$${m.costUsd.toFixed(3)} this turn`);
+  if (meta.length) {
+    const metaEl = el('div', 'meta', meta.join(' · '));
+    if (m.costUsd != null) metaEl.title = `This turn only. Chat total so far: $${chatCost().toFixed(3)}`;
+    wrap.append(metaEl);
+  }
+  if (m.role === 'user') wrap.append(userActions(m.content));
   return wrap;
 }
+
+const chatCost = () => (state.current?.messages || []).reduce((s, m) => s + (m.costUsd || 0), 0);
 
 function renderMessages() {
   const box = $('#messages');
   const empty = $('#empty-state');
   const msgs = state.current?.messages || [];
-  box.replaceChildren(empty, ...msgs.map(messageNode));
+  // Turns before the last /clear are dimmed: the model no longer sees them.
+  let lastClear = -1;
+  msgs.forEach((m, i) => { if (m.role === 'system' && m.kind === 'clear') lastClear = i; });
+  const intro = [];
+  if (state.current?.branchedFrom) {
+    const b = el('div', 'divider branch');
+    b.append(document.createTextNode('Branched from '));
+    const a = el('a', null, state.current.branchedFrom.title || 'another chat');
+    a.href = `#/c/${state.current.branchedFrom.id}`;
+    b.append(a);
+    intro.push(b);
+  }
+  box.replaceChildren(empty, ...intro, ...msgs.map((m, i) => messageNode(m, i, { cleared: i < lastClear })));
   empty.hidden = msgs.length > 0;
   box.scrollTop = box.scrollHeight;
 }
 
 function renderAll() {
+  renderDonut(state.current?.context);
   renderMessages();
   renderSubagents();
   renderQueue();
@@ -349,8 +420,12 @@ function approvalNode(ev) {
   if (ev.summary) text.append(document.createTextNode(': '), el('code', null, ev.summary));
   d.append(text);
   if (ev.status === 'pending') {
-    const answer = (allow) => api(`/api/approvals/${ev.id}`, { method: 'POST', body: { allow } }).catch((e) => alert(e.message));
-    d.append(bannerButton('Allow', () => answer(true), true), bannerButton('Deny', () => answer(false)));
+    const answer = (allow, always = false) => api(`/api/approvals/${ev.id}`, { method: 'POST', body: { allow, always } }).catch((e) => alert(e.message));
+    const alwaysBtn = bannerButton('Always allow', () => answer(true, true));
+    alwaysBtn.title = `Allow ${ev.rule || ev.tool} in this project from now on`;
+    d.append(bannerButton('Allow', () => answer(true), true), alwaysBtn, bannerButton('Deny', () => answer(false)));
+  } else if (ev.note) {
+    d.append(el('span', 'muted small', ev.note));
   }
   return d;
 }
@@ -373,22 +448,68 @@ function elapsed(sa) {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
+const DISMISS_KEY = 'harness-subagents-dismissed';
+function dismissedAt(id) { try { return JSON.parse(localStorage.getItem(DISMISS_KEY) || '{}')[id] || ''; } catch { return ''; } }
+function setDismissed(id) {
+  try {
+    const all = JSON.parse(localStorage.getItem(DISMISS_KEY) || '{}');
+    all[id] = new Date().toISOString();
+    localStorage.setItem(DISMISS_KEY, JSON.stringify(all));
+  } catch { /* ignore */ }
+}
+
+/** A subagent's own activity (tool calls and messages), opened from the panel. */
+function showSubagentLog(sa) {
+  const lines = (sa.log || []).map((l) => (l.kind === 'tool' ? `- \`${l.text.replace(/`/g, "'")}\`` : `\n${l.text}\n`));
+  openModal({
+    title: `${sa.agentType || 'Subagent'}: ${sa.description || ''}`,
+    sub: [sa.status, sa.toolUses ? `${sa.toolUses} tool uses` : '', elapsed(sa)].filter(Boolean).join(' · '),
+    markdown: [lines.join('\n') || '_No activity recorded yet._', sa.result ? `\n---\n**Result**\n\n${sa.result}` : ''].join('\n'),
+  });
+}
+
 function renderSubagents() {
-  const subs = state.current?.subagents || [];
+  const since = dismissedAt(state.current?.id);
+  // Finished subagents stay until dismissed; a new one brings the panel back.
+  const subs = (state.current?.subagents || []).filter((s) => s.status === 'running' || !since || (s.startedAt || '') > since);
+  const bg = (state.current?.background || []).filter((t) => t.status === 'running' || !t.endedAt || Date.now() - Date.parse(t.endedAt) < 10_000);
   const panel = $('#subagents');
-  panel.hidden = !subs.length;
+  panel.hidden = !subs.length && !bg.length;
   clearInterval(tick);
-  if (!subs.length) return;
+  if (!subs.length && !bg.length) return;
   const running = subs.filter((s) => s.status === 'running');
   const counts = ['running', 'done', 'failed', 'stopped']
     .map((st) => [st, subs.filter((s) => s.status === st).length]).filter(([, n]) => n);
-  $('#subagents-summary').textContent = `Subagents · ${counts.map(([st, n]) => `${n} ${st}`).join(', ')}`;
+  const total = subs.length;
+  const finished = total - running.length;
+  // A deterministic indicator: agents dispatched vs. closed.
+  $('#subagents-summary').textContent = `${total ? `Subagents · ${finished}/${total} finished${counts.length ? ` (${counts.map(([st, n]) => `${n} ${st}`).join(', ')})` : ''}` : ''}${bg.length ? `${total ? ' · ' : ''}${bg.filter((t) => t.status === 'running').length} background task${bg.length > 1 ? 's' : ''}` : ''}`;
+  const prog = $('#subagents-progress');
+  prog.hidden = !total;
+  prog.max = total || 1;
+  prog.value = finished;
+  const dismiss = $('#subagents-dismiss');
+  dismiss.hidden = Boolean(running.length) || !total;
   $('#subagents-toggle').setAttribute('aria-expanded', String(subagentsOpen));
   panel.classList.toggle('collapsed', !subagentsOpen);
   const order = { running: 0, failed: 1, stopped: 2, done: 3 };
   const sorted = [...subs].sort((a, b) => (order[a.status] - order[b.status]) || (b.startedAt || '').localeCompare(a.startedAt || ''));
-  $('#subagent-list').replaceChildren(...sorted.map((sa) => {
+  const bgNodes = bg.map((t) => {
+    const li = el('li', `subagent background-task ${t.status}${t.status !== 'running' ? ' fading' : ''}`);
+    li.append(el('span', `pill ${t.status === 'detached' ? 'stopped' : t.status}`, t.status === 'detached' ? 'ended' : t.status), el('span', 'sa-type', t.taskType === 'local_bash' ? 'shell' : t.taskType || 'task'), el('span', 'sa-desc', t.description || ''));
+    const time = el('span', 'sa-time', elapsed(t));
+    li.append(el('span', 'sa-meta muted', 'background'), time);
+    if (t.result) li.append(el('div', 'sa-activity muted', t.result));
+    li._sa = t;
+    li._time = time;
+    return li;
+  });
+  $('#subagent-list').replaceChildren(...bgNodes, ...sorted.map((sa) => {
     const li = el('li', `subagent ${sa.status}`);
+    li.tabIndex = 0;
+    li.title = 'Show what this subagent did';
+    li.addEventListener('click', () => showSubagentLog(sa));
+    li.addEventListener('keydown', (e) => { if (e.key === 'Enter') showSubagentLog(sa); });
     li.append(
       el('span', `pill ${sa.status}`, sa.status),
       el('span', 'sa-type', sa.agentType || 'subagent'),
@@ -405,11 +526,21 @@ function renderSubagents() {
     li._time = time;
     return li;
   }));
-  if (running.length) {
+  if (running.length || bg.length) {
     tick = setInterval(() => {
       for (const li of $('#subagent-list').children) if (li._sa.status === 'running') li._time.textContent = elapsed(li._sa);
+      // Finished background tasks fade out over 10 seconds, then leave the list.
+      if (bg.some((t) => t.status !== 'running' && t.endedAt && Date.now() - Date.parse(t.endedAt) >= 10_000)) renderSubagents();
     }, 1000);
   }
+}
+
+function applyBackground(task) {
+  if (!state.current) return;
+  const list = (state.current.background ||= []);
+  const i = list.findIndex((x) => x.id === task.id);
+  if (i >= 0) list[i] = task; else list.push(task);
+  renderSubagents();
 }
 
 function applySubagent(sa) {
@@ -442,19 +573,23 @@ function renderQueue() {
     row.append(el('div', 'q-text', q.text));
     const t = q.triage || {};
     const status = el('div', 'q-triage');
-    if (t.status === 'pending') status.append(el('span', 'muted', 'Checking whether this should interrupt…'));
-    else if (t.decision === 'interrupt' && !t.dismissed && state.current.running) {
-      status.classList.add('ask');
-      status.append(el('span', null, `Suggests interrupting: ${t.reason || 'this looks urgent.'}`));
-      const yes = el('button', 'btn small primary', 'Interrupt now');
-      yes.type = 'button';
-      yes.addEventListener('click', () => queueAction(q.id, 'send'));
-      const no = el('button', 'btn small', 'Keep queued');
-      no.type = 'button';
-      no.addEventListener('click', () => queueAction(q.id, 'keep'));
-      status.append(yes, no);
+    if (t.status === 'pending') status.append(el('span', 'muted', 'Checking what to do with this…'));
+    else if (t.status === 'done' && !t.dismissed && state.current.running) {
+      // The triage model recommends one of four options; the user decides with one click.
+      const label = { interrupt: 'Interrupt now', queue: 'Wait (keep queued)', parallel: 'Run in parallel', new: 'New chat' };
+      const what = { interrupt: 'Suggests interrupting', queue: 'Suggests waiting', parallel: 'Suggests running it in parallel (a branch with this context)', new: 'Suggests a fresh chat (unrelated topic)' };
+      status.classList.toggle('ask', t.decision !== 'queue');
+      status.append(el('span', null, `${what[t.decision] || what.queue}${t.reason ? `: ${t.reason}` : ''}`));
+      const opts = el('div', 'q-options');
+      for (const d of [t.decision, ...['queue', 'interrupt', 'parallel', 'new'].filter((x) => x !== t.decision)]) {
+        const b = el('button', `btn small${d === t.decision ? ' primary' : ''}`, label[d]);
+        b.type = 'button';
+        b.addEventListener('click', () => queueAction(q.id, d === 'interrupt' ? 'send' : d === 'queue' ? 'keep' : d));
+        opts.append(b);
+      }
+      status.append(opts);
     } else if (t.status === 'done') {
-      status.append(el('span', 'muted', t.decision === 'interrupt' ? 'Kept in the queue' : `Will wait${t.reason ? `: ${t.reason}` : ''}`));
+      status.append(el('span', 'muted', `Will wait${t.reason ? `: ${t.reason}` : ''}`));
     }
     const rm = el('button', 'btn ghost small', '✕');
     rm.type = 'button';
@@ -469,7 +604,8 @@ function renderQueue() {
 async function queueAction(itemId, action) {
   if (!state.current) return;
   try {
-    await api(`/api/conversations/${state.current.id}/queue/${itemId}/${action}`, { method: 'POST', body: {} });
+    const r = await api(`/api/conversations/${state.current.id}/queue/${itemId}/${action}`, { method: 'POST', body: {} });
+    if ((action === 'parallel' || action === 'new') && r.id) { openTab(r.id); refreshList(); return; }
     if (action === 'send' && !state.current.running) setTimeout(() => openConversation(state.current.id), 150);
   } catch (e) {
     alert(e.message);
@@ -481,14 +617,22 @@ async function queueAction(itemId, action) {
 async function send(text) {
   const provider = $('#provider-select').value;
   const model = $('#model-input').value.trim();
+  const images = [...composerPending.images];
+  clearTray();
   if (!state.current) {
     state.current = await api('/api/conversations', { method: 'POST', body: { provider, model, projectId: state.projectId } });
     history.replaceState(null, '', `#/c/${state.current.id}`);
+    openTab(state.current.id);
     $('#rename-chat').hidden = $('#delete-chat').hidden = false;
   }
   const conv = state.current;
   try {
-    const r = await api(`/api/conversations/${conv.id}/messages`, { method: 'POST', body: { text, provider, model } });
+    const r = await api(`/api/conversations/${conv.id}/messages`, { method: 'POST', body: { text, provider, model, images } });
+    if (r.cleared) {
+      state.current = await api(`/api/conversations/${conv.id}`);
+      renderAll();
+      return;
+    }
     if (r.queued) {
       conv.queue = [...(conv.queue || []).filter((q) => q.id !== r.item.id), r.item];
       if (r.quotaHold) conv.quotaHold = r.quotaHold;
@@ -528,7 +672,7 @@ async function attachStream(conv) {
   const paint = () => {
     if (pending) return;
     pending = true;
-    requestAnimationFrame(() => { pending = false; body.innerHTML = renderMarkdown(message.content); stick(); });
+    requestAnimationFrame(() => { pending = false; body.innerHTML = renderMarkdown(message.content); enhanceBody(body); stick(); });
   };
 
   let finished = false;
@@ -553,9 +697,19 @@ async function attachStream(conv) {
         } else if (ev.type === 'text') {
           message.content += ev.text;
           paint();
-        } else if (ev.type === 'tool' || ev.type === 'tool_result') {
+        } else if (ev.type === 'tool' || ev.type === 'tool_result' || ev.type === 'notice') {
           tools.append(toolNode(ev));
+          if (ev.path) {
+            let arts = node.querySelector('.artifacts');
+            if (!arts) { arts = el('div', 'artifacts'); body.after(arts); }
+            if (![...arts.children].some((c) => c.title === ev.path)) arts.append(artifactChip(ev));
+          }
           stick();
+        } else if (ev.type === 'background') {
+          applyBackground(ev.task);
+        } else if (ev.type === 'context') {
+          conv.context = { used: ev.used, limit: ev.limit };
+          renderDonut(conv.context);
         } else if (ev.type === 'skill') {
           upsertSkill(tools, ev);
         } else if (ev.type === 'subagent') {
@@ -600,11 +754,13 @@ async function attachStream(conv) {
     renderAll();
     if (state.current.running) attachStream(state.current);
   }
-  refreshList();
+  await refreshList();
+  markRead();
   void finished;
 }
 
 function setBusy(busy) {
+  $('#composer').classList.toggle('working', busy);
   $('#stop').hidden = !busy;
   $('#running-label').hidden = !busy;
   $('#send').textContent = busy ? 'Queue' : 'Send';
@@ -647,13 +803,20 @@ function connectEvents() {
       }
     } else if (ev.type === 'quota') {
       refreshQuota();
-    } else if (ev.type === 'history') {
-      refreshList();
+    } else if (ev.type === 'history' || ev.type === 'read') {
+      if (ev.type === 'read') {
+        const c = state.conversations.find((x) => x.id === ev.conversationId);
+        if (c) { c.unread = false; c.readAt = ev.readAt; renderList(); }
+      } else refreshList();
+    } else if (ev.type === 'news') {
+      setNewsFlag(ev.unread);
     } else if (ev.type === 'automation' && ev.status === 'notify') {
       const n = state.settings.notifications;
       // Automations are explicit requests: notify even when the window has focus.
       if (n?.enabled) notify({ title: ev.title, body: ev.message || '', conversationId: ev.conversationId, onClick: () => { if (ev.conversationId) location.hash = `#/c/${ev.conversationId}`; } });
     } else if (ev.type === 'approval') {
+      const c = state.conversations.find((x) => x.id === ev.conversationId);
+      if (c) { c.needsYou = ev.status === 'pending'; renderList(); }
       if (ev.status === 'pending') {
         const conv = state.conversations.find((c) => c.id === ev.conversationId);
         maybeNotify({
@@ -740,7 +903,7 @@ function updateProviderStatus() {
 
 /* ---------- settings ---------- */
 
-const SECTIONS = ['history', 'anthropic', 'gemini', 'claudeCode', 'notifications', 'triage', 'google', 'calendars', 'tools', 'files', 'projects', 'contacts', 'routing', 'quota', 'appearance', 'sources', 'homeAssistant'];
+const SECTIONS = ['history', 'permissions', 'desktop', 'anthropic', 'gemini', 'claudeCode', 'notifications', 'triage', 'google', 'calendars', 'tools', 'files', 'projects', 'contacts', 'routing', 'quota', 'appearance', 'sources', 'homeAssistant'];
 
 function fillSettingsForm() {
   const s = state.settings;
@@ -773,7 +936,7 @@ function fillSettingsForm() {
   form.elements['google.clientSecret'].value = '';
   $('#google-secret-state').textContent = s.google.hasClientSecret ? 'saved' : 'not set';
   $('#google-secret-state').className = `key-state${s.google.hasClientSecret ? ' ok' : ''}`;
-  if (!s.projects.hostFolder) form.elements['projects.hostFolder'].placeholder = state.hostFolder || '~/Harness Projects';
+  if (!s.projects.hostFolder) form.elements['projects.hostFolder'].placeholder = state.hostFolder || '~/src';
   applyTheme(s.appearance?.theme);
   fillQuota(s);
   fillHomeAssistant(s);
@@ -835,6 +998,7 @@ function collectSettings() {
 
 async function saveSettings(patch) {
   state.settings = await api('/api/settings', { method: 'PUT', body: patch });
+  window.harnessDesktop?.setOpenAtLogin?.(Boolean(state.settings.desktop?.openAtLogin));
   state.modelCache = {};
   fillSettingsForm();
   updateProviderStatus();
@@ -849,6 +1013,9 @@ function route() {
     : hash.startsWith('#/files') ? 'files'
       : hash.startsWith('#/c/') || hash.startsWith('#/new') ? 'chat' : 'today';
   for (const v of ['chat', 'settings', 'files', 'today']) $(`#${v}-view`).hidden = view !== v;
+  document.body.dataset.view = view;
+  renderTabs();
+  $('#conversations-link').classList.toggle('active', view === 'chat');
   $('#settings-link').classList.toggle('active', view === 'settings');
   $('#files-link').classList.toggle('active', view === 'files');
   $('#today-link').classList.toggle('active', view === 'today');
@@ -863,6 +1030,7 @@ function route() {
   }
   if (view === 'files') { showFiles(hash); return; }
   if (view === 'today') { detachLive(); state.current = null; renderList(); showToday(); return; }
+  if (hash === '#/c' || hash === '#/c/') { const t = lastTab(); location.hash = t ? `#/c/${t}` : '#/new'; return; }
   const m = hash.match(/^#\/c\/([\w-]+)/);
   if (m) {
     if (state.current?.id !== m[1]) openConversation(m[1]);
@@ -891,7 +1059,7 @@ async function init() {
 
   // Projects
   $('#project-new').addEventListener('click', () => {
-    $('#project-host').textContent = `It will be created in ${state.settings.projects?.hostFolder || state.hostFolder || '~/Harness Projects'} with a CLAUDE.md and an outputs folder.`;
+    $('#project-host').textContent = `It will be created in ${state.settings.projects?.hostFolder || state.hostFolder || '~/src'} with a CLAUDE.md and an outputs folder.`;
     $('#project-result').textContent = '';
     $('#project-form').reset();
     $('#project-dialog').showModal();
@@ -1035,6 +1203,20 @@ async function init() {
   initSettingsExtra({ api, save: saveSettings });
   initAutomations({ api, save: saveSettings, collect: collectSettings });
   initHistory({ api, refreshList });
+  initChatExtras({ api, current: () => state.current, conversations: () => state.conversations });
+  initPermissions({ api, projects: () => state.projects });
+  // Shift-click (or ?solo) opens one chat alone in its own window.
+  if (new URLSearchParams(location.search).has('solo')) document.body.classList.add('solo', 'sidebar-collapsed');
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') markRead(); updateBadge(); });
+  window.addEventListener('focus', markRead);
+  $('#artifact').addEventListener('click', (e) => { if (e.target === $('#artifact')) $('#artifact').close(); });
+  $('#subagents-dismiss').addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!state.current) return;
+    setDismissed(state.current.id);
+    renderSubagents();
+  });
+  api('/api/news').then((r) => setNewsFlag(r.unread)).catch(() => {});
   $('#move-chat').addEventListener('change', (e) => moveChat(e.target.value));
   refreshQuota();
   window.addEventListener('hashchange', route);
@@ -1042,6 +1224,20 @@ async function init() {
   await refreshList();
   route();
 }
+
+function openSolo(href) {
+  const url = `${location.origin}/?solo=1${href}`;
+  if (window.harnessDesktop?.openWindow) window.harnessDesktop.openWindow(url);
+  else window.open(url, '_blank', 'popup,width=900,height=900');
+}
+
+/** A dot on Today when the News tab has unread articles. */
+export function setNewsFlag(n) {
+  const link = $('#today-link');
+  link.classList.toggle('has-news', n > 0);
+  link.title = n > 0 ? `${n} new article${n > 1 ? 's' : ''} in News` : '';
+}
+window.harnessSetNewsFlag = setNewsFlag;
 
 init().catch((e) => {
   document.body.textContent = `Could not reach the harness server: ${e.message}`;

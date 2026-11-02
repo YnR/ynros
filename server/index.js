@@ -524,6 +524,32 @@ async function route(req, res) {
     const body = await readJson(req, 30_000_000);
     return sendJson(res, 201, await saveUpload(body));
   }
+  if (parts[1] === 'uploads' && parts[2] === 'file' && method === 'GET') {
+    // Thumbnails of pasted images.
+    const [p] = await uploadedPaths([url.searchParams.get('path')]);
+    if (!p) throw new HttpError(404, 'Not found');
+    const mime = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' }[path.extname(p).toLowerCase()] || 'application/octet-stream';
+    res.writeHead(200, { 'content-type': mime, 'cache-control': 'private, max-age=3600', 'x-content-type-options': 'nosniff' });
+    return res.end(await fs.readFile(p));
+  }
+  if (parts[1] === 'artifact' && method === 'GET') {
+    // A file the agent wrote (HTML or Markdown), shown in the chat's artifact viewer.
+    // HTML is served as a sandboxed document so its scripts can't reach the harness.
+    const p = path.resolve(String(url.searchParams.get('path') || '').replace(/^~(?=$|[\\/])/, process.env.HOME || ''));
+    const ext = path.extname(p).toLowerCase();
+    const kinds = { '.html': 'text/html', '.htm': 'text/html', '.md': 'text/markdown', '.markdown': 'text/markdown', '.txt': 'text/plain', '.svg': 'image/svg+xml', '.json': 'application/json', '.csv': 'text/plain' };
+    if (!kinds[ext]) throw new HttpError(415, 'Only HTML, Markdown, text, SVG, JSON and CSV files can be previewed');
+    let data;
+    try { data = await fs.readFile(p); } catch { throw new HttpError(404, 'File not found'); }
+    if (url.searchParams.get('format') === 'json') return sendJson(res, 200, { path: p, kind: ext.replace('.', ''), content: data.toString('utf8') });
+    res.writeHead(200, {
+      'content-type': `${kinds[ext]}; charset=utf-8`,
+      'cache-control': 'no-store',
+      'content-security-policy': "sandbox allow-scripts allow-popups; default-src * data: blob: 'unsafe-inline' 'unsafe-eval'",
+      'x-content-type-options': 'nosniff',
+    });
+    return res.end(data);
+  }
   if (parts[1] === 'skills' && parts.length === 2 && method === 'GET') {
     const settings = await loadSettings();
     const pid = url.searchParams.get('project') || (await store.getConversation(url.searchParams.get('conversation') || '').catch(() => null))?.projectId;

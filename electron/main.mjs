@@ -1,7 +1,7 @@
 // Desktop app: runs the harness server in-process and shows it in a window,
 // with native notifications. The same UI also works in any browser at
 // http://localhost:4317 while the app (or `npm start`) is running.
-import { app, BrowserWindow, ipcMain, Notification, shell, nativeTheme } from 'electron';
+import { app, BrowserWindow, ipcMain, Notification, shell, nativeTheme, dialog } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer, startAutomations, rearmHolds, importHistoryOnStart } from '../server/index.js';
@@ -31,6 +31,31 @@ async function ensureServer() {
   return 'started';
 }
 
+const windowOptions = () => ({
+  minWidth: 520,
+  minHeight: 400,
+  title: 'Harness',
+  backgroundColor: nativeTheme.shouldUseDarkColors ? '#1b1b1a' : '#f7f7f5',
+  webPreferences: { preload: path.join(here, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false },
+});
+
+/** Same-origin pages (shift-click "open alone") get their own app window; other links go to the browser. */
+function guard(contents) {
+  contents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith(ORIGIN)) {
+      const w = new BrowserWindow({ ...windowOptions(), width: 900, height: 860 });
+      guard(w.webContents);
+      w.loadURL(url);
+      return { action: 'deny' };
+    }
+    if (/^https?:\/\//.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  contents.on('will-navigate', (e, url) => {
+    if (!url.startsWith(ORIGIN)) { e.preventDefault(); if (/^https?:\/\//.test(url)) shell.openExternal(url); }
+  });
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1280,
@@ -46,14 +71,7 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
-  // Links to other sites open in the default browser; the window stays on the app.
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//.test(url)) shell.openExternal(url);
-    return { action: 'deny' };
-  });
-  win.webContents.on('will-navigate', (e, url) => {
-    if (!url.startsWith(ORIGIN)) { e.preventDefault(); if (/^https?:\/\//.test(url)) shell.openExternal(url); }
-  });
+  guard(win.webContents);
   win.loadURL(ORIGIN);
   win.on('closed', () => { win = null; });
 }
@@ -72,6 +90,42 @@ ipcMain.on('harness:notify', (_e, { title, body, hash }) => {
     win.flashFrame(true);
     if (process.platform === 'darwin') app.dock?.bounce('informational');
   }
+});
+
+ipcMain.on('harness:badge', (_e, n) => {
+  // Unread replies plus chats waiting for an answer.
+  app.setBadgeCount?.(Math.max(0, Math.min(999, n)));
+});
+
+ipcMain.on('harness:open-window', (_e, url) => {
+  if (typeof url !== 'string' || !url.startsWith(ORIGIN)) return;
+  const w = new BrowserWindow({ ...windowOptions(), width: 900, height: 860 });
+  guard(w.webContents);
+  w.loadURL(url);
+});
+
+ipcMain.handle('harness:pick-files', async (e) => {
+  const r = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender), { properties: ['openFile', 'openDirectory', 'multiSelections'] });
+  return r.canceled ? [] : r.filePaths;
+});
+
+ipcMain.handle('harness:version', () => app.getVersion());
+
+ipcMain.on('harness:open-at-login', (_e, on) => {
+  try { app.setLoginItemSettings({ openAtLogin: Boolean(on) }); } catch { /* not supported here */ }
+});
+
+// Restart (to load new code) once no chat is running.
+ipcMain.on('harness:restart-when-idle', () => {
+  const check = async () => {
+    try {
+      const list = await (await fetch(`${ORIGIN}/api/conversations`)).json();
+      if (list.some((c) => c.running)) { setTimeout(check, 5000); return; }
+    } catch { /* server gone: restart anyway */ }
+    app.relaunch();
+    app.exit(0);
+  };
+  check();
 });
 
 ipcMain.on('harness:open-external', (_e, url) => {

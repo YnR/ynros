@@ -38,7 +38,7 @@ export async function today(settings) {
     const run = active.get(c.id);
     if (run) {
       out.working.push({ id: c.id, title: c.title, subagents: run.subagents.filter((s) => s.status === 'running').length });
-      const conv = run.conv;
+      const conv = runs.getRun(c.id)?.conv || {};
       const ask = (conv.queue || []).find((q) => q.triage?.decision === 'interrupt' && !q.triage.dismissed);
       if (ask) out.attention.push({ id: c.id, title: c.title, kind: 'interrupt', text: `Wants to interrupt: ${ask.text.slice(0, 120)}` });
       continue;

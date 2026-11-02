@@ -15,7 +15,8 @@
     "dev": "node --watch server/index.js",
     "predesktop": "npm run build && node scripts/ensure-electron.mjs",
     "desktop": "electron electron/main.mjs",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "version:bump": "npm version patch --no-git-tag-version"
   },
   "devDependencies": {
     "electron": "^38.8.6",

@@ -480,6 +480,11 @@ export function importLocal(settings, opts = {}) {
         const first = chat.messages.find((m) => m.role === 'user');
         if (!first || !chat.messages.some((m) => m.role === 'assistant') || HELPER_PROMPT.test(first.content)
           || (chat.claudeCodeSessionId && ownSessions.has(chat.claudeCodeSessionId))) {
+          // A copy imported before the harness chat recorded its session: remove it.
+          if (chat.claudeCodeSessionId && ownSessions.has(chat.claudeCodeSessionId)) {
+            const dup = importId(item.source, chat.key);
+            if (await store.getConversation(dup)) await store.deleteConversation(dup);
+          }
           report.skipped += 1; idx[item.file] = stamp; continue;
         }
         let m = match(chat);
