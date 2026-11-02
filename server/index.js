@@ -10,6 +10,7 @@ import * as files from './files.js';
 import * as projects from './projects.js';
 import * as history from './history.js';
 import * as news from './news.js';
+import * as briefing from './briefing.js';
 import { DATA_DIR } from './settings.js';
 import * as quota from './quota.js';
 import * as mcp from './mcp/registry.js';
@@ -597,6 +598,45 @@ async function route(req, res) {
       return sendJson(res, 200, report);
     }
   }
+  if (parts[1] === 'briefing') {
+    const settings = await loadSettings();
+    if (parts.length === 2 && method === 'GET') {
+      const days = await briefing.listDays(settings);
+      const want = url.searchParams.get('date') || briefing.dayKey();
+      const config = await briefing.readConfig(settings);
+      let day = await briefing.readDay(settings, want);
+      // First open of the day: build it now in the background.
+      if (!day && want === briefing.dayKey() && settings.briefing?.enabled !== false) briefing.ensure(settings, providers).then(() => runs.hub.emit('update', { type: 'briefing' }), () => runs.hub.emit('update', { type: 'briefing' }));
+      return sendJson(res, 200, { day, days, config, status: briefing.currentStatus(), dir: briefing.briefingDir(settings) });
+    }
+    if (parts[2] === 'refresh' && method === 'POST') {
+      await readJson(req);
+      briefing.ensure(settings, providers, { refresh: true }).then(() => runs.hub.emit('update', { type: 'briefing' }), () => runs.hub.emit('update', { type: 'briefing' }));
+      return sendJson(res, 202, { status: briefing.currentStatus() });
+    }
+    if (parts[2] === 'actions' && method === 'POST') {
+      const b = await readJson(req);
+      if (typeof b.text !== 'string' || !b.text.trim()) throw new HttpError(400, 'Missing text');
+      const a = await briefing.addAction(settings, String(b.date || briefing.dayKey()), b);
+      if (!a) throw new HttpError(404, 'No briefing for that day');
+      return sendJson(res, 201, a);
+    }
+    if (parts[2] === 'actions' && parts[3] && method === 'PATCH') {
+      const b = await readJson(req);
+      const a = await briefing.updateAction(settings, String(b.date || briefing.dayKey()), decodeURIComponent(parts[3]), b);
+      if (!a) throw new HttpError(404, 'No such action');
+      return sendJson(res, 200, a);
+    }
+    if (parts[2] === 'sections' && method === 'PUT') {
+      const b = await readJson(req);
+      if (!Array.isArray(b.sections)) throw new HttpError(400, 'Missing sections');
+      return sendJson(res, 200, await briefing.saveSections(settings, b.sections));
+    }
+    if (parts[2] === 'sections' && parts[3] === 'suggest' && method === 'POST') {
+      await readJson(req);
+      return sendJson(res, 200, { sections: await briefing.suggestSections(settings, providers) });
+    }
+  }
   if (parts[1] === 'today' && parts.length === 2 && method === 'GET') {
     return sendJson(res, 200, await today(await loadSettings()));
   }
@@ -966,5 +1006,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     rearmHolds().catch(() => {});
     startAutomations();
     importHistoryOnStart();
+    briefing.startSchedule(loadSettings, providers);
   });
 }

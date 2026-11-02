@@ -1,4 +1,5 @@
 // Home page: what needs attention today.
+import { initBriefing, showBriefing } from './briefing.js';
 const $ = (s) => document.querySelector(s);
 let ctx;
 
@@ -192,8 +193,8 @@ export async function showNews() {
   } catch (e) { box.replaceChildren(el('p', 'muted', e.message)); }
 }
 
-let tab = 'today';
-try { tab = localStorage.getItem('harness-home-tab') || 'today'; } catch { /* ignore */ }
+let tab = 'briefing';
+try { tab = localStorage.getItem('harness-home-tab') || 'briefing'; } catch { /* ignore */ }
 
 function setTab(t) {
   tab = t;
@@ -205,8 +206,11 @@ function setTab(t) {
   }
   $('#today-body').hidden = t !== 'today';
   $('#news-body').hidden = t !== 'news';
+  $('#briefing-body').hidden = t !== 'briefing';
   $('#today-brief').hidden = t !== 'today';
-  if (t === 'news') showNews(); else showTodayCards();
+  $('#today-refresh').hidden = t === 'briefing';
+  $('#today-title').textContent = new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+  if (t === 'news') showNews(); else if (t === 'briefing') showBriefing(); else showTodayCards();
 }
 
 export function showToday() { setTab(tab); }
@@ -224,6 +228,7 @@ async function showTodayCards() {
 
 export function initToday(c) {
   ctx = c;
+  initBriefing(c);
   $('#today-refresh').addEventListener('click', showToday);
   for (const b of document.querySelectorAll('[data-today-tab]')) b.addEventListener('click', () => setTab(b.dataset.todayTab));
   $('#today-brief').addEventListener('click', async () => {

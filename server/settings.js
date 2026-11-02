@@ -96,6 +96,15 @@ export function defaultSettings() {
       // Allow non-destructive git commands (status, diff, log, add, commit…) without asking.
       safeGit: true,
     },
+    briefing: {
+      // Daily briefing from mail and calendar, saved to dir as JSON + HTML per day.
+      enabled: true,
+      dir: '~/.ynros/briefings',
+      hour: 6, // first run of the day happens after this local hour
+      refreshHours: 3, // check again for anything new this often
+      provider: '', // empty = same choice as triage
+      model: '',
+    },
     desktop: {
       // Desktop app: open at login.
       openAtLogin: false,

@@ -4,6 +4,7 @@ import { initFiles, showFiles } from './files.js';
 import { renderSidebar, initSidebarCollapse } from './sidebar.js';
 import { initMentions } from './mentions.js';
 import { initToday, showToday } from './today.js';
+import { briefingUpdated } from './briefing.js';
 import { initSettingsExtra, applyTheme, loadMcp, fillQuota, collectQuota } from './settings-extra.js';
 import { initAutomations, fillHomeAssistant } from './automations.js';
 import { initHistory } from './history.js';
@@ -808,6 +809,8 @@ function connectEvents() {
         const c = state.conversations.find((x) => x.id === ev.conversationId);
         if (c) { c.unread = false; c.readAt = ev.readAt; renderList(); }
       } else refreshList();
+    } else if (ev.type === 'briefing') {
+      briefingUpdated();
     } else if (ev.type === 'news') {
       setNewsFlag(ev.unread);
     } else if (ev.type === 'automation' && ev.status === 'notify') {

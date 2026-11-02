@@ -38,11 +38,13 @@
           <a class="btn ghost icon gear" href="#/settings" title="Settings" aria-label="Settings">⚙</a>
         </header>
         <div class="seg today-tabs" role="tablist" aria-label="Home sections">
-          <button type="button" role="tab" data-today-tab="today" class="on" aria-selected="true">Today</button>
+          <button type="button" role="tab" data-today-tab="briefing" class="on" aria-selected="true">Briefing</button>
+          <button type="button" role="tab" data-today-tab="today" aria-selected="false">Today</button>
           <button type="button" role="tab" data-today-tab="news" aria-selected="false">News <span class="tab-count" id="news-count" hidden></span></button>
         </div>
         <div class="today" id="today-body"><p class="muted">Loading…</p></div>
         <div class="news" id="news-body" hidden></div>
+        <div class="briefing" id="briefing-body" hidden></div>
       </section>
 
       <section id="chat-view" class="view" hidden>
