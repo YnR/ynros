@@ -3,6 +3,7 @@
 import { packager } from '@electron/packager';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 const install = process.argv.includes('--install');
 const pkg = JSON.parse(await fs.readFile('package.json', 'utf8'));
@@ -24,6 +25,9 @@ const [appPath] = await packager({
   ignore: [/^\/dist($|\/)/, /^\/test($|\/)/, /^\/\.git($|\/)/, /^\/client($|\/)/, /^\/scripts($|\/)/, /^\/\.harness-data($|\/)/],
 });
 const app = path.join(appPath, 'ynros.app');
+// The packager leaves Electron's signature invalid after renaming; re-sign ad hoc so macOS will open it.
+execFileSync('codesign', ['--force', '--deep', '-s', '-', app], { stdio: 'inherit' });
+execFileSync('codesign', ['-v', app], { stdio: 'inherit' });
 console.log(`Built ${app}`);
 if (install) {
   const dest = '/Applications/ynros.app';
