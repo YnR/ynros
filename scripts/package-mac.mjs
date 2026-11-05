@@ -1,4 +1,4 @@
-// Packages the desktop app as dist/Harness-darwin-<arch>/Harness.app with the ynr icon.
+// Packages the desktop app as dist/ynros-darwin-<arch>/ynros.app with the ynr icon.
 // Run on the Mac: npm run package:mac   (add --install to copy it to /Applications)
 import { packager } from '@electron/packager';
 import fs from 'node:fs/promises';
@@ -11,9 +11,9 @@ const [appPath] = await packager({
   dir: '.',
   out: 'dist',
   overwrite: true,
-  name: 'Harness',
-  executableName: 'Harness',
-  appBundleId: 'net.ynr.harness',
+  name: 'ynros',
+  executableName: 'ynros',
+  appBundleId: 'net.ynr.ynros',
   appVersion: pkg.version,
   platform: 'darwin',
   arch: process.arch,
@@ -23,10 +23,10 @@ const [appPath] = await packager({
   prune: true,
   ignore: [/^\/dist($|\/)/, /^\/test($|\/)/, /^\/\.git($|\/)/, /^\/client($|\/)/, /^\/scripts($|\/)/, /^\/\.harness-data($|\/)/],
 });
-const app = path.join(appPath, 'Harness.app');
+const app = path.join(appPath, 'ynros.app');
 console.log(`Built ${app}`);
 if (install) {
-  const dest = '/Applications/Harness.app';
+  const dest = '/Applications/ynros.app';
   await fs.rm(dest, { recursive: true, force: true });
   await fs.cp(app, dest, { recursive: true, verbatimSymlinks: true });
   console.log(`Installed ${dest}`);
