@@ -26,6 +26,9 @@ export function buildArgs({ settings, model, sessionId, mcpConfig, forkSession =
   if (sessionId && forkSession) args.push('--fork-session');
   // Helper calls (triage, routing) leave no transcript behind in ~/.claude/projects.
   if (cfg.ephemeral) args.push('--no-session-persistence');
+  // Helper calls (triage, routing, search) need no MCP servers; loading yours
+  // (Gmail, Playwright…) can take longer than the whole answer.
+  if (cfg.noMcp) args.push('--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}');
   if (cfg.permissionMode) args.push('--permission-mode', cfg.permissionMode);
   if (cfg.chrome) args.push('--chrome');
   if (cfg.askInChat !== false && mcpConfig?.mcpServers?.harness) {
@@ -33,7 +36,7 @@ export function buildArgs({ settings, model, sessionId, mcpConfig, forkSession =
     args.push('--permission-prompt-tool', 'mcp__harness__approve');
   }
   const tools = splitList(cfg.allowedTools);
-  if (mcpConfig) {
+  if (mcpConfig && !cfg.noMcp) {
     args.push('--mcp-config', JSON.stringify(mcpConfig));
     // The harness tools only read data, create drafts, or add calendar events without emailing guests.
     if (mcpConfig.mcpServers?.harness) tools.push('mcp__harness');

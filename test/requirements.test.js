@@ -112,3 +112,13 @@ test('smaller-model hint: knows model sizes and only suggests going down', async
   assert.equal(smallerSuggestion(s, 'claudeCode', 'small', 'large'), null);
   assert.equal(smallerSuggestion(s, 'claudeCode', 'medium', 'medium'), null);
 });
+
+test('helper calls through Claude Code skip loading MCP servers', async () => {
+  const { buildArgs } = await import('../server/providers/claudeCode.js');
+  const s = defaultSettings();
+  s.claudeCode.noMcp = true;
+  const a = buildArgs({ settings: s, model: 'haiku', mcpConfig: { mcpServers: { harness: {} } } });
+  assert.ok(a.includes('--strict-mcp-config'));
+  assert.equal(a[a.indexOf('--mcp-config') + 1], '{"mcpServers":{}}');
+  assert.equal(a.filter((x) => x === '--mcp-config').length, 1);
+});

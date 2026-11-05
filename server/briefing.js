@@ -219,7 +219,7 @@ async function askModel(settings, providers, system, content, { signal } = {}) {
   const s = structuredClone(settings);
   s[provider] = { ...(s[provider] || {}), systemPrompt: system };
   if (provider === 'anthropic') s.anthropic.maxTokens = 8000;
-  if (provider === 'claudeCode') Object.assign(s.claudeCode, { permissionMode: 'plan', allowedTools: '', ephemeral: true });
+  if (provider === 'claudeCode') Object.assign(s.claudeCode, { permissionMode: 'plan', allowedTools: '', ephemeral: true, noMcp: true });
   const timeout = AbortSignal.timeout(240_000);
   const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
   let text = '';

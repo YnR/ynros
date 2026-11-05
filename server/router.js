@@ -61,13 +61,15 @@ export async function route({ settings, providers, conv, provider, text }) {
   const s = structuredClone(settings);
   s[rp].systemPrompt = SYSTEM;
   if (rp === 'anthropic') s.anthropic.maxTokens = 150;
-  if (rp === 'claudeCode') { s.claudeCode.permissionMode = 'plan'; s.claudeCode.allowedTools = ''; s.claudeCode.ephemeral = true; }
+  if (rp === 'claudeCode') { s.claudeCode.permissionMode = 'plan'; s.claudeCode.allowedTools = ''; s.claudeCode.ephemeral = true; s.claudeCode.noMcp = true; }
   const prompt = `${brief(conv)}\n\nNew message:\n${text.slice(0, 2000)}`;
   const content = rp === 'claudeCode' ? `${SYSTEM}\n\n${prompt}` : prompt;
   let out = '';
   for await (const ev of impl.stream({
-    settings: s, messages: [{ role: 'user', content }], model: rm, signal: AbortSignal.timeout(20_000), conversation: null,
+    settings: s, messages: [{ role: 'user', content }], model: rm, signal: AbortSignal.timeout(30_000), conversation: null,
   })) if (ev.type === 'text') out += ev.text;
+  // No answer (timeout or a failed run) is an error, not a silent "medium".
+  if (!/\{[\s\S]*\}/.test(out)) throw new Error('The router gave no answer');
   const r = parseRoute(out);
   const prevTier = conv.routedTier || null;
   const tier = chooseTier(prevTier, r.tier, conv.messages.length);

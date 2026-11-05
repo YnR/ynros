@@ -92,7 +92,7 @@ export async function askClaude({ settings, providers, kind, query, candidates, 
   const s = structuredClone(settings);
   s[provider] = { ...(s[provider] || {}), systemPrompt: SYSTEM };
   if (provider === 'anthropic') s.anthropic.maxTokens = 600;
-  if (provider === 'claudeCode') Object.assign(s.claudeCode, { permissionMode: 'plan', allowedTools: '', ephemeral: true, askInChat: false });
+  if (provider === 'claudeCode') Object.assign(s.claudeCode, { permissionMode: 'plan', allowedTools: '', ephemeral: true, askInChat: false, noMcp: true });
   const what = kind === 'settings' ? 'a setting in the Settings page' : 'a past conversation';
   const body = `They are looking for ${what}. They typed: "${String(query).slice(0, 300)}"\n\nCandidates:\n${candidates.map((c, i) => `${i + 1}. ${String(c.text).slice(0, 400)}`).join('\n')}`;
   const content = provider === 'claudeCode' ? `${SYSTEM}\n\n${body}` : body;
