@@ -123,6 +123,8 @@ export function defaultSettings() {
       // "Auto" model: a small model picks small / medium / large per message.
       enabled: true,
       suggestNewChat: true,
+      // Suggest a smaller model when a message looks simple for the one in use.
+      suggestSmaller: true,
       // Optional overrides of the model used for each tier.
       anthropic: { small: '', medium: '', large: '' },
       gemini: { small: '', medium: '', large: '' },

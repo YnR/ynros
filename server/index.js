@@ -16,7 +16,7 @@ import { loadShellEnv, claudeBinary } from './shellEnv.js';
 import { DATA_DIR } from './settings.js';
 import * as quota from './quota.js';
 import * as mcp from './mcp/registry.js';
-import { route as routeModel, tiersFor } from './router.js';
+import { route as routeModel, tiersFor, tierOfModel, smallerSuggestion } from './router.js';
 import { today, BRIEF_PROMPT } from './today.js';
 import * as approvals from './approvals.js';
 import * as automations from './automations.js';
@@ -129,6 +129,7 @@ async function beginTurn(conv, text, { provider: providerName, model, batch, ima
     } catch (e) { console.warn('mentions:', e.message); }
   }
   conv.messages.push(msg);
+  conv.suggestSmaller = null; // a new message gets a fresh check
   await store.saveConversation(conv);
 
   let prepare = null;
@@ -147,6 +148,10 @@ async function beginTurn(conv, text, { provider: providerName, model, batch, ima
       }
       r.model ||= tiersFor(settings, providerName)[r.tier];
       conv.routedTier = r.tier;
+      if (settings.routing?.suggestSmaller !== false) {
+        r.suggestSmaller = smallerSuggestion(settings, providerName, r.tier, r.proposedTier, r.reason);
+        if (r.suggestSmaller) r.suggestSmaller.current = r.model;
+      }
       if (r.related === false && settings.routing?.suggestNewChat !== false && before.messages.length >= 2) {
         r.suggestNewChat = { reason: r.reason || 'This looks like a new topic.' };
         conv.suggestNewChat = { messageTs: msg.ts, reason: r.suggestNewChat.reason };
@@ -155,8 +160,21 @@ async function beginTurn(conv, text, { provider: providerName, model, batch, ima
     };
   }
 
+  // A fixed, bigger model: check in the background (without delaying the reply)
+  // whether a smaller one would have done, and suggest it.
+  let hint = null;
+  const fixedTier = model !== 'auto' ? tierOfModel(settings, providerName, model || settings[providerName]?.model) : null;
+  if (fixedTier && fixedTier !== 'small' && settings.routing?.enabled !== false && settings.routing?.suggestSmaller !== false && !conv.suggestSmallerOff) {
+    const before = { ...conv, messages: conv.messages.slice(0, -1) };
+    hint = async () => {
+      const r = await routeModel({ settings, providers, conv: before, provider: providerName, text });
+      const s = smallerSuggestion(settings, providerName, fixedTier, r.proposedTier, r.reason);
+      return s && { ...s, current: model || settings[providerName]?.model };
+    };
+  }
+
   return runs.startRun({
-    conv, provider, providerName, model, settings, prepare,
+    conv, provider, providerName, model, settings, prepare, hint,
     onFinish: (run) => drainQueue(conv, run),
   });
 }
@@ -956,7 +974,11 @@ async function route(req, res) {
     } else if (parts[3] === 'dismiss-suggestion' && parts.length === 4 && method === 'POST') {
       await readJson(req);
       const c = runs.getRun(id)?.conv || await store.getConversation(id);
-      if (c) { c.suggestNewChat = null; await store.saveConversation(c); }
+      if (c) {
+        if (url.searchParams.get('kind') === 'smaller') { c.suggestSmaller = null; if (url.searchParams.get('never') === '1') c.suggestSmallerOff = true; }
+        else c.suggestNewChat = null;
+        await store.saveConversation(c);
+      }
       return sendJson(res, 200, { ok: true });
     } else if (parts[3] === 'switch' && parts.length === 4 && method === 'POST') {
       // Move the chat to another provider (e.g. when one is out of quota) and send what is waiting.

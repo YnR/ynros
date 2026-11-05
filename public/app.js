@@ -407,6 +407,30 @@ function renderBanners() {
       out.push(b);
     }
   }
+  if (conv?.suggestSmaller) {
+    const s = conv.suggestSmaller;
+    const b = el('div', 'banner info');
+    b.append(el('span', 'grow', `That message looked simple${s.reason ? ` (${s.reason})` : ''}. ${s.model} could handle messages like it for less than ${s.current || `the ${s.from} model`}. Switching starts a new prompt cache, so it pays off over a run of simple messages.`));
+    b.append(bannerButton(`Use ${s.model}`, async () => {
+      $('#model-input').value = s.model;
+      updateModelButton();
+      await api(`/api/conversations/${conv.id}/dismiss-suggestion?kind=smaller`, { method: 'POST', body: {} });
+      conv.suggestSmaller = null;
+      renderBanners();
+      $('#input').focus();
+    }, true));
+    b.append(bannerButton('Keep this model', async () => {
+      await api(`/api/conversations/${conv.id}/dismiss-suggestion?kind=smaller`, { method: 'POST', body: {} });
+      conv.suggestSmaller = null;
+      renderBanners();
+    }));
+    b.append(bannerButton('Don\'t suggest in this chat', async () => {
+      await api(`/api/conversations/${conv.id}/dismiss-suggestion?kind=smaller&never=1`, { method: 'POST', body: {} });
+      conv.suggestSmaller = null;
+      renderBanners();
+    }));
+    out.push(b);
+  }
   if (conv?.suggestNewChat) {
     const b = el('div', 'banner warn');
     b.append(el('span', 'grow', `This looks like a new topic${conv.suggestNewChat.reason ? ` (${conv.suggestNewChat.reason})` : ''}. A fresh chat avoids re-sending this chat's history and saves tokens.`));
@@ -743,6 +767,9 @@ async function attachStream(conv) {
           who.textContent = [PROVIDER_LABEL[message.provider], ev.model].filter(Boolean).join(' · ');
           who.append(el('span', 'routed muted', ` · auto: ${ev.tier}`));
           who.title = ev.reason || '';
+        } else if (ev.type === 'suggest_smaller') {
+          conv.suggestSmaller = { tier: ev.tier, model: ev.model, from: ev.from, current: ev.current, reason: ev.reason };
+          renderBanners();
         } else if (ev.type === 'suggest_new_chat') {
           conv.suggestNewChat = { reason: ev.reason };
           renderBanners();
@@ -831,6 +858,8 @@ function connectEvents() {
       } else refreshList();
     } else if (ev.type === 'briefing') {
       briefingUpdated();
+    } else if (ev.type === 'suggest_smaller') {
+      if (state.current?.id === ev.conversationId) { state.current.suggestSmaller = { tier: ev.tier, model: ev.model, from: ev.from, current: ev.current, reason: ev.reason }; renderBanners(); }
     } else if (ev.type === 'news') {
       setNewsFlag(ev.unread);
     } else if (ev.type === 'automation' && ev.status === 'notify') {
@@ -1125,7 +1154,7 @@ async function init() {
 
   $('#provider-select').addEventListener('change', () => {
     const p = $('#provider-select').value;
-    $('#model-input').value = state.settings[p]?.model || '';
+    $('#model-input').value = defaultModel(p) || '';
     loadModelOptions(p);
     updateProviderStatus();
     updateModelButton();

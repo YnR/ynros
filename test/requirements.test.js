@@ -99,3 +99,16 @@ test('fuzzy search: substrings, letters in order, typos of omission; Claude pick
   assert.deepEqual(parseMatches('{"matches":[{"n":2,"why":"x"},{"n":2},{"n":9},{"n":"a"}]}', 3).matches, [{ n: 2, why: 'x' }]);
   assert.match(snippet('a '.repeat(100) + 'the tile quote arrived', 'tile'), /^…/);
 });
+
+test('smaller-model hint: knows model sizes and only suggests going down', async () => {
+  const { tierOfModel, smallerSuggestion } = await import('../server/router.js');
+  const s = defaultSettings();
+  assert.equal(tierOfModel(s, 'claudeCode', 'opus'), 'large');
+  assert.equal(tierOfModel(s, 'claudeCode', 'sonnet'), 'medium');
+  assert.equal(tierOfModel(s, 'anthropic', 'claude-opus-5-5'), 'large');
+  assert.equal(tierOfModel(s, 'gemini', 'gemini-2.5-flash-lite'), 'small');
+  assert.equal(tierOfModel(s, 'claudeCode', 'my-custom'), null);
+  assert.deepEqual(smallerSuggestion(s, 'claudeCode', 'large', 'small', 'quick fact'), { tier: 'small', model: 'haiku', from: 'large', reason: 'quick fact' });
+  assert.equal(smallerSuggestion(s, 'claudeCode', 'small', 'large'), null);
+  assert.equal(smallerSuggestion(s, 'claudeCode', 'medium', 'medium'), null);
+});

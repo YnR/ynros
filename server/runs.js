@@ -113,7 +113,7 @@ function runSummary(run) {
 
 let runSeq = 0;
 
-export function startRun({ conv, provider, providerName, model, settings, onFinish, prepare }) {
+export function startRun({ conv, provider, providerName, model, settings, onFinish, prepare, hint }) {
   if (runs.has(conv.id)) throw Object.assign(new Error('This chat is already running.'), { status: 409 });
 
   const run = {
@@ -152,7 +152,18 @@ export function startRun({ conv, provider, providerName, model, settings, onFini
         assistant.routed = { tier: r.tier, reason: r.reason, proposedTier: r.proposedTier };
         emit({ type: 'routed', model, tier: r.tier, reason: r.reason });
         if (r.suggestNewChat) emit({ type: 'suggest_new_chat', reason: r.suggestNewChat.reason });
+        if (r.suggestSmaller && !conv.suggestSmallerOff) {
+          conv.suggestSmaller = r.suggestSmaller;
+          emit({ type: 'suggest_smaller', ...r.suggestSmaller });
+        }
       }
+      // Fixed model: the size check runs alongside the reply and never delays it.
+      hint?.().then((s) => {
+        if (!s || conv.suggestSmallerOff) return;
+        conv.suggestSmaller = s;
+        if (runs.get(conv.id) === run) emit({ type: 'suggest_smaller', ...s });
+        else { hub.emit('update', { type: 'suggest_smaller', conversationId: conv.id, ...s }); store.saveConversation(conv, { touch: false }).catch(() => {}); }
+      }).catch(() => {});
       let extra = {};
       try { extra = await runOptions(settings, providerName, conv); } catch (e) { console.warn('tools unavailable:', e.message); }
       // Only turns since the last /clear; API models also get pasted images.

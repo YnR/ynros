@@ -74,4 +74,28 @@ export async function route({ settings, providers, conv, provider, text }) {
   return { ...r, proposedTier: r.tier, tier, model: tiersFor(settings, provider)[tier], router: `${rp}:${rm}` };
 }
 
+/** Which tier a fixed model belongs to, if it is one of the provider's tier models. */
+export function tierOfModel(settings, provider, model) {
+  const m = String(model || '').toLowerCase();
+  if (!m) return null;
+  const tiers = tiersFor(settings, provider);
+  for (const t of ['large', 'medium', 'small']) if (tiers[t] && tiers[t].toLowerCase() === m) return t;
+  // Family names: "opus", "claude-opus-…", "gemini-2.5-pro"…
+  if (/opus|-pro\b/.test(m)) return 'large';
+  if (/sonnet|flash(?!-lite)/.test(m)) return 'medium';
+  if (/haiku|flash-lite/.test(m)) return 'small';
+  return null;
+}
+
+/**
+ * A smaller model that would do for this message, or null. Used to suggest
+ * (never force) a switch: on a fixed model, and in auto chats that stickiness
+ * kept on a bigger tier.
+ */
+export function smallerSuggestion(settings, provider, currentTier, proposedTier, reason) {
+  if (!currentTier || !proposedTier || RANK[proposedTier] >= RANK[currentTier]) return null;
+  const model = tiersFor(settings, provider)[proposedTier];
+  return model ? { tier: proposedTier, model, from: currentTier, reason: reason || '' } : null;
+}
+
 export { parseVerdict };
