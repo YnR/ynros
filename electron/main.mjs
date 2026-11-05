@@ -31,7 +31,15 @@ async function ensureServer() {
   return 'started';
 }
 
+// Black neon logo on a dark system theme, light logo on a light one.
+const iconPath = () => path.join(here, '..', 'public', 'icons', nativeTheme.shouldUseDarkColors ? 'logo-512.png' : 'logo-light-512.png');
+function applyIcon() {
+  if (process.platform === 'darwin') app.dock?.setIcon(iconPath());
+  else for (const w of BrowserWindow.getAllWindows()) w.setIcon(iconPath());
+}
+
 const windowOptions = () => ({
+  icon: iconPath(),
   minWidth: 520,
   minHeight: 400,
   title: 'Harness',
@@ -63,6 +71,7 @@ function createWindow() {
     minWidth: 720,
     minHeight: 500,
     title: 'Harness',
+    icon: iconPath(),
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#1b1b1a' : '#f7f7f5',
     webPreferences: {
       preload: path.join(here, 'preload.cjs'),
@@ -147,6 +156,8 @@ app.whenReady().then(async () => {
     app.quit();
     return;
   }
+  applyIcon();
+  nativeTheme.on('updated', applyIcon);
   createWindow();
   app.on('activate', () => { if (!win) createWindow(); });
 });

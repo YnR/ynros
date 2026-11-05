@@ -67,7 +67,16 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospac
   display: flex; flex-direction: column; padding: 12px;
 }
 .sidebar-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-.brand { font-weight: 650; font-size: 1.05rem; }
+.brand { font-weight: 650; font-size: 1.05rem; display: inline-flex; align-items: center; gap: 8px; }
+.brand-logo { width: 24px; height: 24px; flex: none; }
+/* Light logo on the light theme, black neon logo on the dark theme (follows the app's theme setting). */
+.brand-logo.logo-dark { display: none; }
+:root[data-theme="dark"] .brand-logo.logo-dark { display: block; }
+:root[data-theme="dark"] .brand-logo.logo-light { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .brand-logo.logo-dark { display: block; }
+  :root:not([data-theme="light"]) .brand-logo.logo-light { display: none; }
+}
 .conv-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
 .conv-item {
   display: block; padding: 8px 10px; border-radius: 8px; color: var(--text); text-decoration: none;

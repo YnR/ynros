@@ -4,7 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Harness</title>
-  <link rel="icon" href="data:,">
+  <link rel="icon" type="image/png" sizes="64x64" href="/icons/logo-light-64.png" media="(prefers-color-scheme: light)">
+  <link rel="icon" type="image/png" sizes="64x64" href="/icons/logo-64.png" media="(prefers-color-scheme: dark)">
+  <link rel="apple-touch-icon" href="/icons/logo-180.png">
   <script src="/theme-init.js"></script>
   <link rel="stylesheet" href="/styles.css">
   <script type="module" src="/app.js"></script>
@@ -14,7 +16,7 @@
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-head">
         <button class="btn ghost icon" id="collapse-sidebar" type="button" title="Hide sidebar" aria-label="Hide sidebar">⟨</button>
-        <span class="brand">Harness</span>
+        <span class="brand"><img class="brand-logo logo-light" src="/icons/logo-light-64.png" alt="" width="24" height="24"><img class="brand-logo logo-dark" src="/icons/logo-64.png" alt="" width="24" height="24">Harness</span>
         <button class="btn primary small" id="new-chat" title="New chat">+ Chat</button>
       </div>
       <div class="project-bar">
