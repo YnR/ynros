@@ -101,3 +101,19 @@ test('the HTML copy escapes mail text and only links https', () => {
   assert.ok(!html.includes('<script>x'));
   assert.ok(!html.includes('javascript:'));
 });
+
+test('gathering through Claude Code allows only read tools and denies sending or changing anything', async () => {
+  let seen;
+  const fake = async function* ({ settings: s }) {
+    seen = s.claudeCode;
+    yield { type: 'text', text: '{"mail":[{"id":"x","threadId":"t","from":"a","subject":"s","date":"2026-11-05T01:00:00Z","snippet":""}],"sent":[],"events":[]}' };
+  };
+  const base = { claudeCode: { binaryPath: 'claude', permissionMode: 'bypassPermissions', allowedTools: 'Bash' }, briefing: {} };
+  const g = await b.gatherViaClaudeCode(base, { start: new Date(), end: new Date(), calStart: new Date(), calEnd: new Date() }, { stream: fake });
+  assert.equal(g.mail[0].threadId, 't');
+  assert.equal(seen.permissionMode, 'default');
+  assert.ok(!seen.allowedTools.includes('Bash'));
+  assert.ok(seen.allowedTools.includes('mcp__claude_ai_Gmail__search_threads'));
+  for (const t of ['mcp__claude_ai_Gmail__send_message', 'mcp__claude_ai_Gmail__reply', 'mcp__claude_ai_Google_Calendar__delete_event', 'Bash']) assert.ok(seen.disallowedTools.split(' ').includes(t), t);
+  assert.equal(base.claudeCode.permissionMode, 'bypassPermissions', 'your settings are untouched');
+});

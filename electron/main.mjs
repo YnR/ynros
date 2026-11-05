@@ -4,7 +4,8 @@
 import { app, BrowserWindow, ipcMain, Notification, shell, nativeTheme, dialog } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createServer, startAutomations, rearmHolds, importHistoryOnStart } from '../server/index.js';
+import { createServer, startBackground } from '../server/index.js';
+import { loadShellEnv } from '../server/shellEnv.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4317;
@@ -25,9 +26,7 @@ async function ensureServer() {
     server.once('error', reject);
     server.listen(PORT, '127.0.0.1', resolve);
   });
-  rearmHolds().catch(() => {});
-  startAutomations();
-  importHistoryOnStart();
+  startBackground();
   return 'started';
 }
 
@@ -149,6 +148,7 @@ app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(
 
 app.whenReady().then(async () => {
   try {
+    await loadShellEnv();
     await ensureServer();
   } catch (e) {
     const { dialog } = await import('electron');

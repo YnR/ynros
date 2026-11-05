@@ -2,7 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadSettings, updateSettings, publicSettings, PROVIDERS } from './settings.js';
+import { loadSettings, updateSettings, publicSettings, PROVIDERS, resolveApiKey } from './settings.js';
 import * as store from './store.js';
 import * as runs from './runs.js';
 import { triage } from './triage.js';
@@ -11,6 +11,7 @@ import * as projects from './projects.js';
 import * as history from './history.js';
 import * as news from './news.js';
 import * as briefing from './briefing.js';
+import { loadShellEnv, claudeBinary } from './shellEnv.js';
 import { DATA_DIR } from './settings.js';
 import * as quota from './quota.js';
 import * as mcp from './mcp/registry.js';
@@ -286,6 +287,28 @@ function broadcastHistory(report) {
 }
 
 /** Imports past Claude Code and Gemini CLI chats in the background (Settings → History). */
+/**
+ * One-time switch to your local Claude Code: if the default is still the Claude
+ * API but no API key is set and the claude CLI is installed, use Claude Code.
+ */
+export async function preferLocalClaudeCode() {
+  const s = await loadSettings();
+  if (s.migrations?.localClaudeCode) return false;
+  const move = s.defaultProvider === 'anthropic' && !resolveApiKey(s, 'anthropic').key && Boolean(claudeBinary());
+  await updateSettings({ ...(move ? { defaultProvider: 'claudeCode' } : {}), migrations: { localClaudeCode: true } });
+  return move;
+}
+
+/** Everything that runs in the background once the server is listening. */
+export async function startBackground() {
+  await loadShellEnv();
+  await preferLocalClaudeCode().catch(() => {});
+  rearmHolds().catch(() => {});
+  startAutomations();
+  importHistoryOnStart();
+  briefing.startSchedule(loadSettings, providers);
+}
+
 export async function importHistoryOnStart() {
   store.pruneEmpty().catch(() => {});
   const settings = await loadSettings();
@@ -1002,11 +1025,9 @@ export function createServer({ port }) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT) || 4317;
   const host = process.env.HOST || '127.0.0.1';
+  await loadShellEnv();
   createServer({ port }).listen(port, host, () => {
     console.log(`Harness running at http://localhost:${port}`);
-    rearmHolds().catch(() => {});
-    startAutomations();
-    importHistoryOnStart();
-    briefing.startSchedule(loadSettings, providers);
+    startBackground();
   });
 }

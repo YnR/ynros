@@ -62,3 +62,26 @@ test('the / menu always offers /clear', async () => {
   const list = await listCommands(defaultSettings(), null);
   assert.ok(list.some((c) => c.name === 'clear'));
 });
+
+test('local Claude Code: PATH merge, binary lookup, and no API key leaks into the CLI', async () => {
+  const { mergePath, findOnPath, resolveClaudeBinary } = await import('../server/shellEnv.js');
+  const { childEnv } = await import('../server/providers/claudeCode.js');
+  assert.equal(mergePath('/a:/b', '/b:/c', ''), '/a:/b:/c');
+  assert.equal(findOnPath('definitely-not-here-xyz', '/usr/bin:/bin'), null);
+  assert.ok(findOnPath('sh', '/usr/bin:/bin'));
+  assert.equal(resolveClaudeBinary('/opt/x/claude'), '/opt/x/claude');
+  const env = childEnv({}, { PATH: '/x', ANTHROPIC_API_KEY: 'k' });
+  assert.equal(env.ANTHROPIC_API_KEY, undefined);
+  assert.equal(env.PATH, '/x');
+  assert.equal(childEnv({ useApiKey: true }, { ANTHROPIC_API_KEY: 'k' }).ANTHROPIC_API_KEY, 'k');
+});
+
+test('settings sections added later are saved, not dropped', async () => {
+  const { updateSettings, loadSettings } = await import('../server/settings.js');
+  await updateSettings({ desktop: { openAtLogin: true }, briefing: { hour: 7 }, migrations: { localClaudeCode: true } });
+  const s = await loadSettings();
+  assert.equal(s.desktop.openAtLogin, true);
+  assert.equal(s.briefing.hour, 7);
+  assert.equal(s.migrations.localClaudeCode, true);
+  assert.equal(defaultSettings().defaultProvider, 'claudeCode');
+});

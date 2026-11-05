@@ -1,5 +1,6 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 import { transcriptPrefix } from '../convo.js';
+import { resolveClaudeBinary } from '../shellEnv.js';
 // Tools that create or change a file the user may want to open (an artifact).
 const ARTIFACT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 import readline from 'node:readline';
@@ -38,6 +39,8 @@ export function buildArgs({ settings, model, sessionId, mcpConfig, forkSession =
     if (mcpConfig.mcpServers?.harness) tools.push('mcp__harness');
   }
   if (tools.length) args.push('--allowedTools', ...tools);
+  const denied = splitList(cfg.disallowedTools);
+  if (denied.length) args.push('--disallowedTools', ...denied);
   if (cfg.systemPrompt) args.push('--append-system-prompt', cfg.systemPrompt);
   return args;
 }
@@ -48,7 +51,7 @@ export function test(settings, spawnImpl = nodeSpawn) {
     let out = '';
     let child;
     try {
-      child = spawnImpl(cfg.binaryPath || 'claude', ['--version'], { cwd: cfg.workingDirectory || undefined });
+      child = spawnImpl(resolveClaudeBinary(cfg.binaryPath), ['--version'], { cwd: cfg.workingDirectory || undefined });
     } catch (e) {
       resolve({ ok: false, message: e.message });
       return;
@@ -65,6 +68,16 @@ export function test(settings, spawnImpl = nodeSpawn) {
       ? { ok: true, message: `Found ${out.trim()}` }
       : { ok: false, message: out.trim() || `exited with code ${code}` }));
   });
+}
+
+/**
+ * The CLI's environment. ANTHROPIC_API_KEY would make Claude Code bill the API
+ * instead of using your Claude login, so it is removed unless you opt in.
+ */
+export function childEnv(cfg, env = process.env) {
+  const out = { ...env };
+  if (!cfg.useApiKey) { delete out.ANTHROPIC_API_KEY; delete out.ANTHROPIC_AUTH_TOKEN; }
+  return out;
 }
 
 // Tool names Claude Code uses to launch a subagent.
@@ -110,9 +123,9 @@ export async function* stream({ settings, messages, model, signal, conversation,
   if (!conversation?.claudeCodeSessionId && messages.length > 1) prompt = transcriptPrefix(messages) + prompt;
   const args = buildArgs({ settings, model, sessionId: conversation?.claudeCodeSessionId, mcpConfig, forkSession: Boolean(conversation?.forkSession) });
 
-  const child = spawnImpl(cfg.binaryPath || 'claude', args, {
+  const child = spawnImpl(resolveClaudeBinary(cfg.binaryPath), args, {
     cwd: cwd || cfg.workingDirectory || undefined,
-    env: process.env,
+    env: childEnv(cfg),
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   const onAbort = () => child.kill('SIGTERM');

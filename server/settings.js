@@ -7,13 +7,13 @@ const SETTINGS_FILE = () => path.join(DATA_DIR, 'settings.json');
 
 export const PROVIDERS = ['anthropic', 'gemini', 'claudeCode'];
 // Every settings section the settings page may update.
-const SECTIONS = [...PROVIDERS, 'notifications', 'google', 'calendars', 'tools', 'triage', 'files', 'projects', 'contacts', 'quota', 'routing', 'appearance', 'sources', 'homeAssistant'];
+const SECTIONS = [...PROVIDERS, 'notifications', 'google', 'calendars', 'tools', 'triage', 'files', 'projects', 'contacts', 'quota', 'routing', 'appearance', 'sources', 'homeAssistant', 'history', 'permissions', 'desktop', 'briefing', 'migrations'];
 // Values that are write-only: stored, but never sent back to the browser.
 const SECRETS = { anthropic: ['apiKey'], gemini: ['apiKey'], google: ['clientSecret'], homeAssistant: ['token'] };
 
 export function defaultSettings() {
   return {
-    defaultProvider: 'anthropic',
+    defaultProvider: 'claudeCode',
     anthropic: {
       apiKey: '',
       model: 'claude-sonnet-5-5',
@@ -36,6 +36,8 @@ export function defaultSettings() {
       askInChat: true,
       // Claude in Chrome: let Claude Code act in your Chrome browser (--chrome).
       chrome: false,
+      // Pass ANTHROPIC_API_KEY through to Claude Code (bills the API). Off = your Claude login.
+      useApiKey: false,
     },
     sources: {
       // Feeds for the Today view, one per line: "Name | https://…/feed.xml" or just the URL.
@@ -104,6 +106,14 @@ export function defaultSettings() {
       refreshHours: 3, // check again for anything new this often
       provider: '', // empty = same choice as triage
       model: '',
+      // Where mail and calendar come from: auto (harness Google sign-in, else your
+      // local Claude Code's claude.ai Gmail/Calendar connectors), harness, or claudeCode.
+      source: 'auto',
+      fetchModel: 'sonnet',
+    },
+    migrations: {
+      // One-time switch of the default provider to your local Claude Code.
+      localClaudeCode: false,
     },
     desktop: {
       // Desktop app: open at login.

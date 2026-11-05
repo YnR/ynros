@@ -1,4 +1,5 @@
 import { resolveApiKey } from './settings.js';
+import { claudeBinary } from './shellEnv.js';
 
 /**
  * Decide, with a small fast model, whether a message sent while a task is
@@ -40,6 +41,8 @@ export function pickTriageModel(settings) {
     return { provider: cfg.provider, model: cfg.model || SMALL_MODELS[cfg.provider] };
   }
   if (resolveApiKey(settings, 'anthropic').key) return { provider: 'anthropic', model: SMALL_MODELS.anthropic };
+  // Your local Claude Code (same login as the terminal) before Gemini.
+  if (claudeBinary()) return { provider: 'claudeCode', model: SMALL_MODELS.claudeCode };
   if (resolveApiKey(settings, 'gemini').key) return { provider: 'gemini', model: SMALL_MODELS.gemini };
   return { provider: 'claudeCode', model: SMALL_MODELS.claudeCode };
 }
