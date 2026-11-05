@@ -151,11 +151,28 @@ async function moveChat(projectId) {
   }
 }
 
+/** The small button next to the input shows the current provider and model. */
+function updateModelButton() {
+  const p = $('#provider-select').value;
+  const m = $('#model-input').value.trim();
+  $('#model-btn-label').textContent = `${PROVIDER_LABEL[p] || p}${m ? ` · ${m}` : ''}`;
+  $('#model-btn-dot').className = $('#provider-status').className;
+  $('#model-btn').disabled = $('#provider-select').disabled;
+}
+
+function setModelPop(open) {
+  const pop = $('#model-pop');
+  pop.hidden = !open;
+  $('#model-btn').setAttribute('aria-expanded', String(open));
+  if (open) $('#provider-select').focus();
+}
+
 function setComposer(provider, model) {
   $('#provider-select').value = provider;
   $('#model-input').value = model ?? '';
   loadModelOptions(provider);
   updateProviderStatus();
+  updateModelButton();
 }
 
 function detachLive() {
@@ -770,6 +787,7 @@ function setBusy(busy) {
   $('#send').title = busy ? 'Add to the queue; it is sent when the current task finishes' : '';
   $('#provider-select').disabled = busy;
   $('#model-input').disabled = busy;
+  updateModelButton();
   $('#input').placeholder = busy
     ? 'Working… you can keep typing. New messages are queued and sent together.'
     : 'Message… (Enter to send, Shift+Enter for a new line)';
@@ -904,6 +922,8 @@ function updateProviderStatus() {
     dot.className = 'status-dot missing';
     dot.title = 'No API key yet. Add one in Settings.';
   }
+  $('#model-btn').title = `Choose provider and model · ${dot.title}`;
+  updateModelButton();
 }
 
 /* ---------- settings ---------- */
@@ -1108,6 +1128,16 @@ async function init() {
     $('#model-input').value = state.settings[p]?.model || '';
     loadModelOptions(p);
     updateProviderStatus();
+    updateModelButton();
+  });
+  $('#model-input').addEventListener('input', updateModelButton);
+  $('#model-input').addEventListener('change', updateModelButton);
+  $('#model-btn').addEventListener('click', (e) => { e.stopPropagation(); setModelPop($('#model-pop').hidden); });
+  $('#model-pop').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' || (e.key === 'Enter' && e.target.id === 'model-input')) { e.preventDefault(); setModelPop(false); $('#input').focus(); }
+  });
+  document.addEventListener('click', (e) => {
+    if (!$('#model-pop').hidden && !e.target.closest('#model-pop, #model-btn')) setModelPop(false);
   });
 
   $('#subagents-toggle').addEventListener('click', () => { subagentsOpen = !subagentsOpen; renderSubagents(); });

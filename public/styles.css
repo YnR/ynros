@@ -125,6 +125,7 @@ body.sidebar-collapsed #toggle-sidebar, body.sidebar-collapsed [data-toggle-side
 .composer { border-top: 1px solid var(--border); padding: 12px 20px 16px; background: var(--bg); }
 .composer > * { max-width: 820px; margin: 0 auto; }
 .composer-controls { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.composer { position: relative; }
 .composer-controls select, .composer-controls input { width: auto; }
 #model-input { flex: 0 1 240px; }
 .status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
@@ -516,3 +517,11 @@ mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: in
 body[data-view="chat"] #chat-title { cursor: text; border-radius: 6px; padding: 2px 6px; margin-left: -6px; }
 body[data-view="chat"] #chat-title:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
 #chat-title.editing { background: var(--panel); outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent); text-overflow: clip; }
+
+/* model picker: a small button by the input, with a popover */
+.model-btn { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; white-space: nowrap; align-self: flex-end; height: 38px; }
+.model-btn #model-btn-label { overflow: hidden; text-overflow: ellipsis; }
+.model-pop { position: absolute; left: 12px; bottom: calc(100% - 8px); z-index: 30; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.18); margin: 0; }
+.model-pop[hidden] { display: none; }
+.model-pop input { min-width: 180px; }
+@media (max-width: 600px) { .model-btn { max-width: 120px; } .model-pop { left: 8px; right: 8px; flex-wrap: wrap; } }
