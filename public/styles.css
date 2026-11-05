@@ -511,3 +511,8 @@ mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: in
 #settings-form .search-hide { display: none !important; }
 #settings-form .search-hit { outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent); outline-offset: 4px; border-radius: 6px; }
 @media (max-width: 600px) { .settings-search { max-width: 160px; } }
+
+/* click-to-rename chat title */
+body[data-view="chat"] #chat-title { cursor: text; border-radius: 6px; padding: 2px 6px; margin-left: -6px; }
+body[data-view="chat"] #chat-title:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+#chat-title.editing { background: var(--panel); outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent); text-overflow: clip; }

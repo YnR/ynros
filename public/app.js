@@ -177,7 +177,7 @@ function newChat(projectId = null) {
   renderAll();
   clearTray();
   $('#chat-title').textContent = 'New chat';
-  $('#rename-chat').hidden = $('#delete-chat').hidden = true;
+  $('#delete-chat').hidden = true;
   refreshList();
   $('#input').focus();
 }
@@ -194,7 +194,7 @@ async function openConversation(id) {
   state.projectId = state.current.projectId || null;
   showProjectBadge(state.current.projectId);
   $('#chat-title').textContent = state.current.title;
-  $('#rename-chat').hidden = $('#delete-chat').hidden = false;
+  $('#delete-chat').hidden = false;
   openTab(id);
   resetHistory();
   clearTray();
@@ -626,7 +626,7 @@ async function send(text) {
     state.current = await api('/api/conversations', { method: 'POST', body: { provider, model, projectId: state.projectId } });
     history.replaceState(null, '', `#/c/${state.current.id}`);
     openTab(state.current.id);
-    $('#rename-chat').hidden = $('#delete-chat').hidden = false;
+    $('#delete-chat').hidden = false;
   }
   const conv = state.current;
   try {
@@ -696,7 +696,7 @@ async function attachStream(conv) {
         if (ev.type === 'idle') { finished = true; break; }
         if (ev.type === 'start') {
           conv.title = ev.conversation.title;
-          $('#chat-title').textContent = conv.title;
+          if (!$('#chat-title').isContentEditable) $('#chat-title').textContent = conv.title;
         } else if (ev.type === 'text') {
           message.content += ev.text;
           paint();
@@ -1112,14 +1112,38 @@ async function init() {
 
   $('#subagents-toggle').addEventListener('click', () => { subagentsOpen = !subagentsOpen; renderSubagents(); });
 
-  $('#rename-chat').addEventListener('click', async () => {
-    if (!state.current) return;
-    const title = prompt('Rename chat', state.current.title);
-    if (!title) return;
-    const updated = await api(`/api/conversations/${state.current.id}`, { method: 'PATCH', body: { title } });
-    state.current.title = updated.title;
-    $('#chat-title').textContent = updated.title;
-    refreshList();
+  // Click the chat's name to rename it; it saves when you click away (if not empty). Enter saves, Escape cancels.
+  const titleEl = $('#chat-title');
+  titleEl.addEventListener('click', () => {
+    if (!state.current || titleEl.isContentEditable) return;
+    titleEl.dataset.before = titleEl.textContent;
+    titleEl.contentEditable = 'plaintext-only';
+    titleEl.classList.add('editing');
+    titleEl.focus();
+    const r = document.createRange();
+    r.selectNodeContents(titleEl);
+    getSelection().removeAllRanges();
+    getSelection().addRange(r);
+  });
+  titleEl.addEventListener('keydown', (e) => {
+    if (!titleEl.isContentEditable) return;
+    if (e.key === 'Enter') { e.preventDefault(); titleEl.blur(); }
+    if (e.key === 'Escape') { e.preventDefault(); titleEl.textContent = titleEl.dataset.before; titleEl.blur(); }
+  });
+  titleEl.addEventListener('blur', async () => {
+    if (!titleEl.isContentEditable) return;
+    titleEl.contentEditable = 'false';
+    titleEl.classList.remove('editing');
+    const before = titleEl.dataset.before;
+    const title = titleEl.textContent.replace(/\s+/g, ' ').trim();
+    if (!state.current || !title || title === before) { titleEl.textContent = before; return; }
+    titleEl.textContent = title;
+    try {
+      const updated = await api(`/api/conversations/${state.current.id}`, { method: 'PATCH', body: { title, titleEdited: true } });
+      state.current.title = updated.title;
+      titleEl.textContent = updated.title;
+      refreshList();
+    } catch (err) { titleEl.textContent = before; alert(err.message); }
   });
   $('#delete-chat').addEventListener('click', async () => {
     if (!state.current || !confirm('Delete this chat?')) return;
