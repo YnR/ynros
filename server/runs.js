@@ -27,7 +27,8 @@ async function runOptions(settings, providerName, conv) {
       servers.harness = {
         command: process.execPath,
         args: [MCP_SERVER],
-        env: { HARNESS_URL: local.url, HARNESS_TOKEN: local.token, HARNESS_CONVERSATION: conv.id },
+        // In the desktop app execPath is the app itself; this makes it run the script as plain Node.
+        env: { HARNESS_URL: local.url, HARNESS_TOKEN: local.token, HARNESS_CONVERSATION: conv.id, ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}) },
       };
     }
     if (Object.keys(servers).length) out.mcpConfig = { mcpServers: servers };

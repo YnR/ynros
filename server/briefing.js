@@ -54,7 +54,7 @@ async function writeFile(file, text) {
 
 export async function readConfig(settings) {
   const c = await readJsonFile(path.join(briefingDir(settings), 'config.json'), {});
-  return { startDate: c.startDate || null, sections: Array.isArray(c.sections) ? c.sections : [], sectionsSuggestedAt: c.sectionsSuggestedAt || null };
+  return { startDate: c.startDate || null, sections: Array.isArray(c.sections) ? c.sections : [], sectionsSuggestedAt: c.sectionsSuggestedAt || null, sectionsEdited: Boolean(c.sectionsEdited) };
 }
 async function writeConfig(settings, c) {
   await writeFile(path.join(briefingDir(settings), 'config.json'), JSON.stringify(c, null, 2));
@@ -124,7 +124,10 @@ export async function gatherViaClaudeCode(settings, { start, end, calStart, calE
   Object.assign(s.claudeCode, {
     systemPrompt: CC_FETCH, permissionMode: 'default', allowedTools: CC_READ.join(' '), disallowedTools: CC_DENY.join(' '), ephemeral: true, chrome: false, askInChat: false,
   });
-  const q = `after:${Math.floor(start.getTime() / 1000)} before:${Math.floor(end.getTime() / 1000)}`;
+  // The claude.ai Gmail connector ignores epoch-second dates; use calendar days and filter afterwards.
+  const ymd = (d) => `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
+  const dayAfter = new Date(end.getTime() - 1); dayAfter.setDate(dayAfter.getDate() + 1);
+  const q = `after:${ymd(new Date(start.getFullYear(), start.getMonth(), start.getDate() - 1))} before:${ymd(dayAfter)}`;
   const content = `${CC_FETCH}
 
 1. Gmail: search threads with "${q} -category:promotions -category:social -category:forums -in:sent" (up to ${maxMail}). Put them in "mail".
@@ -140,7 +143,8 @@ If a tool is missing or fails, leave that list empty and continue.`;
   const j = parseJson(text);
   if (!j) throw new Error('Claude Code did not return mail and calendar data');
   const arr = (x) => (Array.isArray(x) ? x : []);
-  return { mail: arr(j.mail), sent: arr(j.sent), events: arr(j.events), errors: [], connected: true, via: 'claudeCode' };
+  const inWindow = (m) => { const t = Date.parse(m?.date); return Number.isNaN(t) || (t >= start.getTime() && t < end.getTime()); };
+  return { mail: arr(j.mail).filter(inWindow), sent: arr(j.sent).filter(inWindow), events: arr(j.events), errors: [], connected: true, via: 'claudeCode' };
 }
 
 const useClaudeCodeFor = (settings, has) => settings.briefing?.source !== 'harness'
@@ -359,7 +363,9 @@ async function gatherWeek(settings) {
 async function buildDay(settings, providers, key, prev, config, { refresh = false, existing = null, deps = {} } = {}) {
   const sections = config.sections;
   const day = existing || carryForward(prev, key, sections);
-  const since = refresh && day.generatedAt ? day.generatedAt : null;
+  // A day with nothing in it (for example an earlier failed read) is read again in full.
+  const empty = !day.sections.some((s) => s.items.length) && !day.actions.length;
+  const since = refresh && day.generatedAt && !empty ? day.generatedAt : null;
   const gathered = await (deps.gather || gather)(settings, key, { since });
   if (!gathered.connected) {
     day.errors = ['Connect Google in Settings so the briefing can read mail and calendar.'];
@@ -392,7 +398,8 @@ export function ensure(settings, providers, { refresh = false, deps = {}, today 
     try {
       const config = await readConfig(settings);
       if (!config.startDate) config.startDate = today;
-      if (!config.sectionsSuggestedAt) {
+      // Suggest again if no suggestion stuck (an earlier read found nothing) and you haven't edited them.
+      if (!config.sectionsSuggestedAt || (!config.sectionsEdited && !config.sections.some((s) => !s.fixed))) {
         status.step = 'Suggesting sections from the last week';
         // Try again next run if Google isn't connected yet.
         try { config.sections = await suggestSections(settings, providers, deps); config.sectionsSuggestedAt = new Date().toISOString(); } catch { /* keep the fixed ones */ }
@@ -482,6 +489,7 @@ export async function saveSections(settings, sections) {
   const config = await readConfig(settings);
   config.sections = normalizeSections(sections);
   config.sectionsSuggestedAt ||= new Date().toISOString();
+  config.sectionsEdited = true;
   await writeConfig(settings, config);
   return config;
 }

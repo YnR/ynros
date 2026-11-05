@@ -109,11 +109,24 @@ test('gathering through Claude Code allows only read tools and denies sending or
     yield { type: 'text', text: '{"mail":[{"id":"x","threadId":"t","from":"a","subject":"s","date":"2026-11-05T01:00:00Z","snippet":""}],"sent":[],"events":[]}' };
   };
   const base = { claudeCode: { binaryPath: 'claude', permissionMode: 'bypassPermissions', allowedTools: 'Bash' }, briefing: {} };
-  const g = await b.gatherViaClaudeCode(base, { start: new Date(), end: new Date(), calStart: new Date(), calEnd: new Date() }, { stream: fake });
+  const g = await b.gatherViaClaudeCode(base, { start: new Date('2026-11-04T00:00:00Z'), end: new Date('2026-11-06T00:00:00Z'), calStart: new Date(), calEnd: new Date() }, { stream: fake });
   assert.equal(g.mail[0].threadId, 't');
   assert.equal(seen.permissionMode, 'default');
   assert.ok(!seen.allowedTools.includes('Bash'));
   assert.ok(seen.allowedTools.includes('mcp__claude_ai_Gmail__search_threads'));
   for (const t of ['mcp__claude_ai_Gmail__send_message', 'mcp__claude_ai_Gmail__reply', 'mcp__claude_ai_Google_Calendar__delete_event', 'Bash']) assert.ok(seen.disallowedTools.split(' ').includes(t), t);
   assert.equal(base.claudeCode.permissionMode, 'bypassPermissions', 'your settings are untouched');
+});
+
+test('Claude Code Gmail queries use calendar dates, and results are filtered to the window', async () => {
+  let prompt;
+  const fake = async function* ({ messages }) {
+    prompt = messages[0].content;
+    yield { type: 'text', text: '{"mail":[{"id":"in","date":"2026-11-04T15:00:00"},{"id":"before","date":"2026-11-03T15:00:00"}],"sent":[],"events":[]}' };
+  };
+  const start = new Date(2026, 10, 4); const end = new Date(2026, 10, 5);
+  const g = await b.gatherViaClaudeCode({ claudeCode: {}, briefing: {} }, { start, end, calStart: start, calEnd: end }, { stream: fake });
+  assert.match(prompt, /after:2026\/11\/03 before:2026\/11\/05/);
+  assert.doesNotMatch(prompt, /after:\d{9,}/);
+  assert.deepEqual(g.mail.map((m) => m.id), ['in']);
 });
