@@ -1,0 +1,32 @@
+{
+  "name": "ynros-harness",
+  "version": "0.1.0",
+  "description": "Personal chat harness for Claude (API + Claude Code) and Gemini",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "prestart": "npm run build",
+    "start": "node server/index.js",
+    "predev": "npm run build",
+    "dev": "node --watch server/index.js",
+    "predesktop": "npm run build && node scripts/ensure-electron.mjs",
+    "desktop": "electron electron/main.mjs",
+    "test": "node --test test/*.test.js",
+    "version:bump": "npm version patch --no-git-tag-version",
+    "package:mac": "npm run build && node scripts/package-mac.mjs",
+    "install:mac": "npm run build && node scripts/package-mac.mjs --install"
+  },
+  "devDependencies": {
+    "electron": "^38.8.6",
+    "esbuild": "^0.25.12",
+    "@electron/packager": "^20.3.0"
+  },
+  "dependencies": {
+    "@toast-ui/editor": "^3.2.2"
+  },
+  "main": "electron/main.mjs"
+}

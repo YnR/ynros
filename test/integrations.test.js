@@ -1,0 +1,290 @@
+import './_env.js';
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import * as ics from '../server/integrations/ics.js';
+import * as gemini from '../server/providers/gemini.js';
+import * as anthropic from '../server/providers/anthropic.js';
+import { defaultSettings } from '../server/settings.js';
+import { parseVerdict, buildTriagePrompt, pickTriageModel } from '../server/triage.js';
+
+const ICS = `BEGIN:VCALENDAR
+BEGIN:VEVENT
+UID:1
+SUMMARY:Standup\\, daily
+DTSTART:20261102T090000Z
+DTEND:20261102T091500Z
+RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR;COUNT=5
+EXDATE:20261104T090000Z
+END:VEVENT
+BEGIN:VEVENT
+UID:2
+SUMMARY:Holiday
+DTSTART;VALUE=DATE:20261105
+DTEND;VALUE=DATE:20261106
+END:VEVENT
+BEGIN:VEVENT
+UID:3
+SUMMARY:Cancelled
+STATUS:CANCELLED
+DTSTART:20261103T100000Z
+END:VEVENT
+END:VCALENDAR`;
+
+test('ics: parses, expands weekly BYDAY rules, honours EXDATE and COUNT', () => {
+  const events = ics.expand(ics.parseIcs(ICS), new Date('2026-11-01T00:00:00Z'), new Date('2026-11-30T00:00:00Z'));
+  const standups = events.filter((e) => e.uid === '1').map((e) => e.start.toISOString().slice(0, 10));
+  assert.deepEqual(standups, ['2026-11-02', '2026-11-06', '2026-11-09', '2026-11-11']); // 5 occurrences minus the EXDATE
+  assert.equal(events.find((e) => e.uid === '1').summary, 'Standup, daily');
+  assert.ok(events.find((e) => e.uid === '2').allDay);
+  assert.ok(!events.some((e) => e.uid === '3'));
+});
+
+test('ics: feed list accepts names, comments and webcal://', () => {
+  const feeds = ics.parseFeeds('# work\nWork | webcal://example.com/a.ics\nhttps://cal.example.org/b.ics\n');
+  assert.deepEqual(feeds, [
+    { id: 'ics:1', name: 'Work', url: 'https://example.com/a.ics' },
+    { id: 'ics:2', name: 'cal.example.org', url: 'https://cal.example.org/b.ics' },
+  ]);
+});
+
+function sse(events) {
+  return new Response(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(''));
+}
+
+const fakeTool = { name: 'gmail_search', description: 'x', schema: { type: 'object', properties: { query: { type: 'string' } } } };
+
+test('gemini: runs a function call and sends the result back', async () => {
+  const settings = defaultSettings();
+  settings.gemini.apiKey = 'k';
+  const bodies = [];
+  const fetchImpl = async (_url, opts) => {
+    bodies.push(JSON.parse(opts.body));
+    if (bodies.length === 1) {
+      return sse([{ candidates: [{ content: { parts: [{ functionCall: { name: 'gmail_search', args: { query: 'is:unread' } }, thoughtSignature: 'sig' }] } }] }]);
+    }
+    return sse([{ candidates: [{ content: { parts: [{ text: 'You have 1 unread.' }] }, finishReason: 'STOP' }] }]);
+  };
+  const calls = [];
+  const events = [];
+  for await (const ev of gemini.stream({
+    settings, messages: [{ role: 'user', content: 'unread?' }], fetchImpl,
+    tools: [fakeTool], runTool: async (n, a) => { calls.push([n, a]); return { results: [{ subject: 'Hi' }] }; },
+  })) events.push(ev);
+  assert.deepEqual(calls, [['gmail_search', { query: 'is:unread' }]]);
+  assert.equal(bodies[0].tools[0].functionDeclarations[0].name, 'gmail_search');
+  const second = bodies[1].contents;
+  assert.equal(second.at(-2).parts[0].thoughtSignature, 'sig', 'model parts are sent back verbatim');
+  assert.equal(second.at(-1).parts[0].functionResponse.response.results[0].subject, 'Hi');
+  assert.ok(events.some((e) => e.type === 'tool' && e.name === 'gmail_search'));
+  assert.match(events.filter((e) => e.type === 'text').map((e) => e.text).join(''), /1 unread/);
+});
+
+test('anthropic: runs tool_use blocks and loops until end_turn', async () => {
+  const settings = defaultSettings();
+  settings.anthropic.apiKey = 'k';
+  const bodies = [];
+  const fetchImpl = async (_url, opts) => {
+    bodies.push(JSON.parse(opts.body));
+    if (bodies.length === 1) {
+      return sse([
+        { type: 'message_start', message: { usage: { input_tokens: 5 } } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Checking.' } },
+        { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 't1', name: 'load_skill' } },
+        { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"name":' } },
+        { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '"greet"}' } },
+        { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 3 } },
+      ]);
+    }
+    return sse([
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Salutations.' } },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 2 } },
+    ]);
+  };
+  const events = [];
+  for await (const ev of anthropic.stream({
+    settings, messages: [{ role: 'user', content: 'greet' }], fetchImpl,
+    tools: [{ name: 'load_skill', description: 'x', schema: { type: 'object', properties: {} } }],
+    runTool: async () => ({ name: 'greet', instructions: '# Greet\nSay salutations.', path: '/s/greet' }),
+  })) events.push(ev);
+  assert.deepEqual(bodies[1].messages.at(-2).content.map((b) => b.type), ['text', 'tool_use']);
+  assert.deepEqual(bodies[1].messages.at(-2).content[1].input, { name: 'greet' });
+  assert.equal(bodies[1].messages.at(-1).content[0].tool_use_id, 't1');
+  const skills = events.filter((e) => e.type === 'skill');
+  assert.equal(skills.at(-1).text, '# Greet\nSay salutations.', 'skills surface as skill events, not tool output');
+  assert.deepEqual(events.at(-1).usage, { input: 5, output: 5 });
+});
+
+test('triage: parses verdicts and prefers a connected small model', () => {
+  assert.deepEqual(parseVerdict('```json\n{"decision":"interrupt","reason":"user said stop"}\n```'), { decision: 'interrupt', reason: 'user said stop' });
+  assert.equal(parseVerdict('nonsense').decision, 'queue');
+  const s = defaultSettings();
+  delete process.env.ANTHROPIC_API_KEY; delete process.env.GEMINI_API_KEY; delete process.env.GOOGLE_API_KEY;
+  assert.deepEqual(pickTriageModel(s), { provider: 'claudeCode', model: 'haiku' });
+  s.gemini.apiKey = 'g';
+  assert.equal(pickTriageModel(s).provider, 'gemini');
+  s.anthropic.apiKey = 'a';
+  assert.deepEqual(pickTriageModel(s), { provider: 'anthropic', model: 'claude-haiku-5-5' });
+  assert.match(buildTriagePrompt({ task: 'T', message: 'M', queued: ['Q'] }), /## New message\nM/);
+});
+
+test('mentions: API models get mentioned files inline', async () => {
+  const fs = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { expandMentions } = await import('../server/files.js');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mention-'));
+  await fs.writeFile(path.join(dir, 'a.md'), 'alpha');
+  await fs.writeFile(path.join(dir, 'my notes.txt'), 'beta');
+  const r = await expandMentions(dir, 'see @a.md and @"my notes.txt", not @missing.md or me@example.com');
+  assert.deepEqual(r.attachments, ['a.md', 'my notes.txt']);
+  assert.match(r.content, /<attached_file path="a.md">\nalpha\n<\/attached_file>/);
+  assert.match(r.content, /<attached_file path="my notes.txt">\nbeta/);
+  const outside = await expandMentions(dir, 'read @../../etc/passwd');
+  assert.deepEqual(outside.attachments, []);
+  await fs.rm(dir, { recursive: true });
+});
+
+test('contacts: vCard parsing, notebook notes, merged search', async () => {
+  const fs = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'people-'));
+  const contacts = await import('../server/integrations/contacts.js');
+  const vcf = path.join(dir, 'c.vcf');
+  await fs.writeFile(vcf, 'BEGIN:VCARD\nVERSION:3.0\nFN:Ada Lovelace\nEMAIL;TYPE=work:ada@example.com\nTEL:+44 1\nORG:Analytical;Engines\nEND:VCARD\nBEGIN:VCARD\nN:Hopper;Grace;;;\nEMAIL:grace@example.com\nEND:VCARD\n');
+  const parsed = contacts.parseVcards(await fs.readFile(vcf, 'utf8'));
+  assert.equal(parsed[1].name, 'Grace Hopper');
+  assert.equal(parsed[0].organization, 'Analytical, Engines');
+
+  const settings = defaultSettings();
+  settings.contacts.vcardSources = vcf;
+  await contacts.addNote({ email: 'ada@example.com', name: 'Ada', note: 'Prefers mornings' });
+  const r = await contacts.search(settings, 'ada');
+  assert.equal(r.results[0].name, 'Ada Lovelace');
+  assert.equal(r.results[0].notes[0].text, 'Prefers mornings');
+  assert.equal(r.results.length, 1, 'notebook entry merges with the contact');
+  await fs.rm(dir, { recursive: true });
+});
+
+test('quota: the reserve blocks automatic work but not new instructions', async () => {
+  const quota = await import('../server/quota.js');
+  quota._reset();
+  const s = defaultSettings();
+  await quota.update('claudeCode', { status: 'allowed_warning', utilization: 0.96, resetsAt: Date.now() + 3_600_000 });
+  assert.equal((await quota.check(s, 'claudeCode', 'user')).ok, true);
+  const auto = await quota.check(s, 'claudeCode', 'auto');
+  assert.equal(auto.ok, false);
+  assert.equal(auto.reason, 'reserve');
+  await quota.update('claudeCode', { utilization: 0.5 });
+  assert.equal((await quota.check(s, 'claudeCode', 'auto')).ok, true);
+
+  // Token budgets for API keys.
+  s.quota.anthropic = { budget: 1000, windowHours: 1 };
+  await quota.record('anthropic', { input: 600, output: 400 });
+  assert.equal((await quota.check(s, 'anthropic', 'user')).reason, 'exhausted');
+
+  assert.deepEqual(quota.limitFromError('Claude AI usage limit reached|1793580000'), { status: 'rejected', resetsAt: 1793580000000 });
+  assert.equal(quota.limitFromError('some other failure'), null);
+});
+
+test('mcp: imports servers from a Gemini extension manifest', async () => {
+  const mcp = await import('../server/mcp/registry.js');
+  const seen = [];
+  const fetchImpl = async (u) => {
+    seen.push(u);
+    if (u.includes('/HEAD/')) return Response.json({ name: 'weather', version: '1.0.0', mcpServers: { weather: { httpUrl: 'https://mcp.example.com/mcp' }, local: { command: 'node', args: ['${extensionPath}/server.js'] } } });
+    return new Response('nope', { status: 404 });
+  };
+  const r = await mcp.importGeminiExtension('https://github.com/acme/weather-ext', fetchImpl);
+  assert.equal(seen[0], 'https://raw.githubusercontent.com/acme/weather-ext/HEAD/gemini-extension.json');
+  assert.deepEqual(r.imported, ['weather']);
+  assert.equal(r.skipped[0].name, 'local');
+  const reg = await mcp.loadRegistry();
+  assert.equal(reg.servers.weather.url, 'https://mcp.example.com/mcp');
+  assert.equal(reg.servers.weather.source, 'gemini-extension:weather');
+});
+
+test('router: sticky tier choice and tolerant parsing', async () => {
+  const { chooseTier, parseRoute } = await import('../server/router.js');
+  assert.equal(chooseTier(null, 'small', 0), 'small');
+  assert.equal(chooseTier('small', 'large', 10), 'large');
+  assert.equal(chooseTier('large', 'small', 10), 'large');
+  assert.equal(chooseTier('large', 'small', 2), 'small');
+  assert.deepEqual(parseRoute('sure {"tier":"large","related":false,"reason":"x"}'), { tier: 'large', related: false, reason: 'x' });
+  assert.equal(parseRoute('garbage').tier, 'medium');
+});
+
+test('feeds: parses RSS and Atom, builds Google News topic feeds', async () => {
+  const feeds = await import('../server/integrations/feeds.js');
+  const rss = `<?xml version="1.0"?><rss><channel><title>UXR digest</title>
+    <item><title><![CDATA[Diary studies & you]]></title><link>https://ex.com/a</link><pubDate>Sun, 01 Nov 2026 08:00:00 GMT</pubDate><description>&lt;p&gt;Hello &amp; welcome&lt;/p&gt;</description></item>
+  </channel></rss>`;
+  const r = feeds.parseFeed(rss);
+  assert.equal(r.title, 'UXR digest');
+  assert.deepEqual(r.items[0], { title: 'Diary studies & you', link: 'https://ex.com/a', date: '2026-11-01T08:00:00.000Z', summary: 'Hello & welcome', source: undefined });
+  const atom = '<feed xmlns="http://www.w3.org/2005/Atom"><title>A</title><entry><title>E1</title><link rel="alternate" href="https://ex.com/e1"/><updated>2026-11-01T10:00:00Z</updated><summary>S</summary></entry></feed>';
+  assert.equal(feeds.parseFeed(atom).items[0].link, 'https://ex.com/e1');
+  const s = defaultSettings();
+  s.sources.feeds = 'UXR | https://ex.com/uxr.xml';
+  s.sources.newsTopics = 'AI research, design';
+  const srcs = feeds.parseSources(s);
+  assert.equal(srcs.length, 3);
+  assert.equal(srcs[0].name, 'UXR');
+  assert.match(srcs[1].url, /^https:\/\/news\.google\.com\/rss\/search\?q=AI\+research\+when%3A2d/);
+});
+
+test('feeds: a site URL is followed to its feed', async () => {
+  const feeds = await import('../server/integrations/feeds.js');
+  const html = '<html><head><link rel="alternate" type="application/rss+xml" href="/uxr-digest/feed.xml"></head></html>';
+  assert.deepEqual(feeds.discoverFeeds(html, 'https://ynr.github.io/uxr-digest/').slice(0, 2), [
+    'https://ynr.github.io/uxr-digest/feed.xml', 'https://ynr.github.io/uxr-digest/rss.xml',
+  ]);
+  const fetchImpl = async (u) => (u.endsWith('/uxr-digest/')
+    ? new Response(html)
+    : u.endsWith('feed.xml') ? new Response('<rss><channel><title>UXR</title><item><title>A</title><link>https://x/a</link></item></channel></rss>') : new Response('', { status: 404 }));
+  const r = await feeds.loadSource({ name: 'UXR', url: 'https://ynr.github.io/uxr-digest/' }, fetchImpl);
+  assert.equal(r.items[0].title, 'A');
+});
+
+test('automations: schedules, one-offs and geofences fire at the right moments', async () => {
+  const auto = await import('../server/automations.js');
+  const { hub } = await import('../server/runs.js');
+  auto._reset();
+  const fired = [];
+  const onUpdate = (ev) => { if (ev.type === 'automation' && ev.status === 'notify') fired.push(ev.title); };
+  hub.on('update', onUpdate);
+
+  // Schedule: due once within 10 minutes of the time, on the right days.
+  const r = { trigger: { schedule: { time: '08:30', days: [1] } }, lastFired: null };
+  const mon = new Date(2026, 10, 2, 8, 31); // Monday
+  assert.equal(auto.scheduleDue(r, mon), true);
+  assert.equal(auto.scheduleDue(r, new Date(2026, 10, 3, 8, 31)), false, 'Tuesday');
+  assert.equal(auto.scheduleDue(r, new Date(2026, 10, 2, 8, 50)), false, 'too late');
+  r.lastFired = mon.toISOString();
+  assert.equal(auto.scheduleDue(r, new Date(2026, 10, 2, 8, 35)), false, 'once per day');
+
+  // One-off reminder fires once and disables itself.
+  const at = new Date(Date.now() - 60_000).toISOString();
+  const once = await auto.create({ trigger: { at }, action: { type: 'notify', title: 'Call mum' } });
+  await auto.tick();
+  assert.deepEqual(fired, ['Call mum']);
+  assert.equal((await auto.list()).find((x) => x.id === once.id).enabled, false);
+
+  // Geofence: fires on the transition, not while staying.
+  await auto.create({ trigger: { zone: { zone: 'Work', event: 'leave' } }, action: { type: 'notify', title: 'Buy milk' } });
+  auto._setZone('Work');
+  await auto.tick();
+  assert.equal(fired.length, 1);
+  hub.off('update', onUpdate);
+  assert.match(auto.describe({ trigger: { schedule: { time: '08:00' }, zone: { zone: 'home', event: 'in' } }, action: { type: 'prompt', prompt: 'brief me' } }), /run "brief me" at 08:00 every day if I am at home/);
+});
+
+test('home assistant: zone matching', async () => {
+  const ha = await import('../server/integrations/homeassistant.js');
+  assert.equal(ha.inZone('home', 'home'), true);
+  assert.equal(ha.inZone('not_home', 'away'), true);
+  assert.equal(ha.inZone('Work', 'zone.work'), true);
+  assert.equal(ha.inZone('Gym', 'Work'), false);
+});
