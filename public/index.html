@@ -19,6 +19,10 @@
         <span class="brand"><img class="brand-logo logo-light" src="/icons/logo-light-64.png" alt="" width="24" height="24"><img class="brand-logo logo-dark" src="/icons/logo-64.png" alt="" width="24" height="24">Harness</span>
         <button class="btn primary small" id="new-chat" title="New chat">+ Chat</button>
       </div>
+      <div class="search-box">
+        <input type="search" id="conv-search" placeholder="Search chats" aria-label="Search chats" autocomplete="off" spellcheck="false">
+        <kbd class="search-kbd" aria-hidden="true">⌘K</kbd>
+      </div>
       <div class="project-bar">
         <span class="muted small">Projects</span>
         <button class="btn ghost small" id="project-new" type="button" title="New project">+ Project</button>
@@ -131,7 +135,9 @@
         <header class="chat-head">
           <button class="btn ghost icon" data-toggle-sidebar aria-label="Toggle sidebar">☰</button>
           <h1>Settings</h1>
+          <input type="search" id="settings-search" class="settings-search" placeholder="Search settings" aria-label="Search settings" autocomplete="off" spellcheck="false">
         </header>
+        <div class="settings-search-status" id="settings-search-status" aria-live="polite"></div>
         <form class="settings" id="settings-form" autocomplete="off">
           <p class="muted">Settings and keys are saved on this computer only, in <code id="data-dir">~/.ynros-harness</code>. Keys are never sent back to the browser.</p>
 

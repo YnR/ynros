@@ -5,6 +5,7 @@ import { renderSidebar, initSidebarCollapse } from './sidebar.js';
 import { initMentions } from './mentions.js';
 import { initToday, showToday } from './today.js';
 import { briefingUpdated } from './briefing.js';
+import { initSearch, convSearchActive, renderConvSearch } from './search.js';
 import { initSettingsExtra, applyTheme, loadMcp, fillQuota, collectQuota } from './settings-extra.js';
 import { initAutomations, fillHomeAssistant } from './automations.js';
 import { initHistory } from './history.js';
@@ -101,6 +102,7 @@ async function markRead() {
 function renderList() {
   renderTabs();
   updateBadge();
+  if (convSearchActive()) { renderConvSearch(); return; }
   renderSidebar($('#conv-list'), {
     perGroup: state.settings?.projects?.chatsPerGroup || 3,
     onSolo: (href) => openSolo(href),
@@ -1203,6 +1205,7 @@ async function init() {
   initFiles({ api, el, openModal });
   initMentions({ api, current: () => state.current, projectId: () => state.projectId });
   initToday({ api });
+  initSearch({ api, getState: () => state, rerender: () => renderList() });
   initSettingsExtra({ api, save: saveSettings });
   initAutomations({ api, save: saveSettings, collect: collectSettings });
   initHistory({ api, refreshList });

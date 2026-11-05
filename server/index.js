@@ -11,6 +11,7 @@ import * as projects from './projects.js';
 import * as history from './history.js';
 import * as news from './news.js';
 import * as briefing from './briefing.js';
+import * as search from './search.js';
 import { loadShellEnv, claudeBinary } from './shellEnv.js';
 import { DATA_DIR } from './settings.js';
 import * as quota from './quota.js';
@@ -620,6 +621,23 @@ async function route(req, res) {
       const report = await history.importExport(settings, { content: body.content, path: body.path });
       broadcastHistory(report);
       return sendJson(res, 200, report);
+    }
+  }
+  if (parts[1] === 'search') {
+    if (parts[2] === 'conversations' && method === 'GET') {
+      return sendJson(res, 200, { results: await search.searchConversations(url.searchParams.get('q') || '') });
+    }
+    if (parts[2] === 'ask' && method === 'POST') {
+      const b = await readJson(req);
+      const query = String(b.query || '').trim();
+      if (!query) throw new HttpError(400, 'Missing query');
+      let candidates;
+      if (b.kind === 'conversations') candidates = await search.conversationCandidates();
+      else if (b.kind === 'settings' && Array.isArray(b.candidates)) {
+        candidates = b.candidates.slice(0, 400).filter((c) => c && typeof c.id === 'string' && typeof c.text === 'string').map((c) => ({ id: c.id.slice(0, 200), text: c.text.slice(0, 400) }));
+      } else throw new HttpError(400, 'Unknown search kind');
+      if (!candidates.length) return sendJson(res, 200, { matches: [], note: 'Nothing to search yet.' });
+      return sendJson(res, 200, await search.askClaude({ settings: await loadSettings(), providers, kind: b.kind, query, candidates }));
     }
   }
   if (parts[1] === 'briefing') {

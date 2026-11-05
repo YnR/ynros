@@ -85,3 +85,17 @@ test('settings sections added later are saved, not dropped', async () => {
   assert.equal(s.migrations.localClaudeCode, true);
   assert.equal(defaultSettings().defaultProvider, 'claudeCode');
 });
+
+test('fuzzy search: substrings, letters in order, typos of omission; Claude picks are validated', async () => {
+  const { fuzzyScore, fuzzyRank } = await import('../public/fuzzy.js');
+  assert.ok(fuzzyScore('notif', 'Notifications'));
+  assert.ok(fuzzyScore('ntfctn', 'Notifications'));
+  assert.ok(fuzzyScore('chats per', 'Chats shown per project'));
+  assert.equal(fuzzyScore('zebra', 'Notifications'), 0);
+  assert.equal(fuzzyScore('ae', 'a' + 'x'.repeat(100) + 'e'), 0, 'letters spread too far apart do not match');
+  const r = fuzzyRank('lisbon', [{ t: 'Trip to Lisbon' }, { t: 'Lunch' }, { t: 'lisbon flights' }], (x) => [[x.t]]);
+  assert.deepEqual(r.map((x) => x.item.t), ['lisbon flights', 'Trip to Lisbon']);
+  const { parseMatches, snippet } = await import('../server/search.js');
+  assert.deepEqual(parseMatches('{"matches":[{"n":2,"why":"x"},{"n":2},{"n":9},{"n":"a"}]}', 3).matches, [{ n: 2, why: 'x' }]);
+  assert.match(snippet('a '.repeat(100) + 'the tile quote arrived', 'tile'), /^…/);
+});
