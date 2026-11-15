@@ -42,7 +42,7 @@ const json = (method, body) => ({ method, headers: { 'content-type': 'applicatio
 test('serves the UI', async () => {
   const res = await fetch(`${base}/`);
   assert.equal(res.status, 200);
-  assert.match(await res.text(), /<title>Harness<\/title>/);
+  assert.match(await res.text(), /<title>ynros<\/title>/);
 });
 
 test('rejects foreign Host and Origin headers', async () => {

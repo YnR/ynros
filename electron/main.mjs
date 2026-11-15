@@ -41,7 +41,7 @@ const windowOptions = () => ({
   icon: iconPath(),
   minWidth: 520,
   minHeight: 400,
-  title: 'Harness',
+  title: 'ynros',
   backgroundColor: nativeTheme.shouldUseDarkColors ? '#1b1b1a' : '#f7f7f5',
   webPreferences: { preload: path.join(here, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false },
 });
@@ -69,7 +69,7 @@ function createWindow() {
     height: 860,
     minWidth: 720,
     minHeight: 500,
-    title: 'Harness',
+    title: 'ynros',
     icon: iconPath(),
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#1b1b1a' : '#f7f7f5',
     webPreferences: {
@@ -86,7 +86,7 @@ function createWindow() {
 
 ipcMain.on('harness:notify', (_e, { title, body, hash }) => {
   if (!Notification.isSupported()) return;
-  const n = new Notification({ title: String(title || 'Harness'), body: String(body || '').slice(0, 300) });
+  const n = new Notification({ title: String(title || 'ynros'), body: String(body || '').slice(0, 300) });
   n.on('click', () => {
     if (!win) createWindow();
     win.show();
@@ -152,7 +152,7 @@ app.whenReady().then(async () => {
     await ensureServer();
   } catch (e) {
     const { dialog } = await import('electron');
-    dialog.showErrorBox('Harness could not start', `${e.message}\n\nIs something else using port ${PORT}? Set PORT to use another one.`);
+    dialog.showErrorBox('ynros could not start', `${e.message}\n\nIs something else using port ${PORT}? Set PORT to use another one.`);
     app.quit();
     return;
   }

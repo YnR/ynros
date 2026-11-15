@@ -82,7 +82,7 @@ async function refreshList() {
 function updateBadge() {
   const n = state.conversations.filter((c) => (c.unread && c.id !== visibleChatId()) || c.needsYou).length;
   const usage = quotaTitle();
-  document.title = `${n ? `(${n}) ` : ''}Harness${usage ? ` · ${usage}` : ''}`;
+  document.title = usage ? `ynros · ${usage}` : 'ynros';
   window.harnessDesktop?.setBadge?.(n);
 }
 
@@ -463,7 +463,32 @@ function renderBanners() {
 async function refreshQuota() {
   try { state.quota = await api('/api/quota'); } catch { state.quota = {}; }
   renderBanners();
+  renderQuotaMeters();
   updateBadge();
+}
+
+/** Horizontal gauges in the sidebar: how much of each provider's window is used. */
+function renderQuotaMeters() {
+  const box = document.getElementById('quota-meters');
+  if (!box) return;
+  const rows = Object.values(state.quota || {}).filter((q) => q?.label && (q.utilization != null || q.exhausted));
+  box.replaceChildren(...rows.map((q) => {
+    const pct = q.exhausted ? 100 : Math.min(100, Math.round(q.utilization * 100));
+    const row = el('div', `meter${q.exhausted ? ' out' : pct >= 80 ? ' warn' : ''}`);
+    const head = el('div', 'meter-head');
+    head.append(el('span', 'meter-label', q.label), el('span', 'meter-value', q.exhausted ? 'out' : `${pct}% used`));
+    const track = el('div', 'meter-track');
+    const fill = el('div', 'meter-fill');
+    fill.style.width = `${pct}%`;
+    track.append(fill);
+    row.append(head, track, el('div', 'meter-sub muted', q.resetsAt ? `Resets ${fmtTime(q.resetsAt)}` : ''));
+    row.setAttribute('role', 'meter');
+    row.setAttribute('aria-label', `${q.label} usage`);
+    row.setAttribute('aria-valuenow', String(pct));
+    row.setAttribute('aria-valuemin', '0');
+    row.setAttribute('aria-valuemax', '100');
+    return row;
+  }));
 }
 
 /* ---------- approvals ---------- */
@@ -1275,7 +1300,7 @@ async function init() {
   $('#notify-test').addEventListener('click', async () => {
     if (permissionState() === 'default') await requestPermission();
     updateNotifyState();
-    notify({ title: 'Harness', body: 'Notifications are working.' });
+    notify({ title: 'ynros', body: 'Notifications are working.' });
   });
 
   $('#google-copy').addEventListener('click', () => navigator.clipboard?.writeText($('#google-redirect').textContent));
