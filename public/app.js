@@ -81,8 +81,20 @@ async function refreshList() {
 /** Unread replies and chats waiting for an answer: window title, dock badge, sidebar. */
 function updateBadge() {
   const n = state.conversations.filter((c) => (c.unread && c.id !== visibleChatId()) || c.needsYou).length;
-  document.title = n ? `(${n}) Harness` : 'Harness';
+  const usage = quotaTitle();
+  document.title = `${n ? `(${n}) ` : ''}Harness${usage ? ` · ${usage}` : ''}`;
   window.harnessDesktop?.setBadge?.(n);
+}
+
+/** Usage for the title bar: "Claude Code 42% (16:40) · Gemini out until 18:05". Shows providers with a reading. */
+function quotaTitle() {
+  const hm = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return Object.values(state.quota || {}).map((q) => {
+    if (!q?.label) return null;
+    if (q.exhausted) return `${q.label} out${q.resetsAt ? ` until ${hm(q.resetsAt)}` : ''}`;
+    if (q.utilization == null) return null;
+    return `${q.label} ${Math.round(q.utilization * 100)}%${q.resetsAt ? ` (${hm(q.resetsAt)})` : ''}`;
+  }).filter(Boolean).join(' · ');
 }
 const visibleChatId = () => (document.visibilityState === 'visible' && document.body.dataset.view === 'chat' ? state.current?.id : null);
 
@@ -451,6 +463,7 @@ function renderBanners() {
 async function refreshQuota() {
   try { state.quota = await api('/api/quota'); } catch { state.quota = {}; }
   renderBanners();
+  updateBadge();
 }
 
 /* ---------- approvals ---------- */
@@ -1308,6 +1321,8 @@ async function init() {
   api('/api/news').then((r) => setNewsFlag(r.unread)).catch(() => {});
   $('#move-chat').addEventListener('change', (e) => moveChat(e.target.value));
   refreshQuota();
+  // Re-read usage each minute so the title clears when a limit resets.
+  setInterval(refreshQuota, 60_000);
   window.addEventListener('hashchange', route);
   connectEvents();
   await refreshList();
