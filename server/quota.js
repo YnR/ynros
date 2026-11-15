@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
 import { DATA_DIR, resolveApiKey } from './settings.js';
+import { resolveClaudeBinary } from './shellEnv.js';
 
 /**
  * Usage limits per provider. Two kinds of signal:
@@ -129,6 +131,39 @@ export function limitFromError(err) {
   const secs = msg.match(/retry (?:after|in) (\d+(?:\.\d+)?)\s*s/i);
   if (!resetsAt && secs) resetsAt = Date.now() + Number(secs[1]) * 1000;
   return { status: 'rejected', resetsAt };
+}
+
+/**
+ * Parse `claude /usage` output: "Current session: 15% used · resets Nov 14 at 9:40pm (TZ)".
+ * "Current session" is the 5-hour window. Returns { utilization (0..1), resetsAt (ms) } or null.
+ * The reset clock time is read in local time, which is the machine's zone.
+ */
+export function parseUsage(text, now = Date.now()) {
+  const m = String(text).match(/Current session:\s*(\d+(?:\.\d+)?)%\s*used\s*·\s*resets\s+([A-Za-z]{3})\s+(\d{1,2})\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
+  if (!m) return null;
+  const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+  const month = months.indexOf(m[2].toLowerCase());
+  if (month < 0) return null;
+  let hour = Number(m[4]) % 12;
+  if (m[6].toLowerCase() === 'pm') hour += 12;
+  const year = new Date(now).getFullYear();
+  let resetsAt = new Date(year, month, Number(m[3]), hour, Number(m[5] || 0)).getTime();
+  // Only a date months back means "next year" (Dec reset read in January).
+  if (resetsAt < now - 180 * 86_400_000) resetsAt = new Date(year + 1, month, Number(m[3]), hour, Number(m[5] || 0)).getTime();
+  return { utilization: Number(m[1]) / 100, resetsAt };
+}
+
+/** Ask Claude Code for its 5-hour usage and store it. Quiet no-op when Claude Code is not set up. */
+export async function refreshClaudeCodeUsage(settings) {
+  const cfg = settings.claudeCode || {};
+  if (!cfg.binaryPath) return null;
+  const out = await new Promise((resolve) => {
+    execFile(resolveClaudeBinary(cfg.binaryPath), ['-p', '/usage'], { timeout: 30_000, cwd: cfg.workingDirectory || undefined }, (err, stdout) => resolve(err ? null : String(stdout)));
+  });
+  const u = out && parseUsage(out);
+  if (!u) return null;
+  await update('claudeCode', u);
+  return u;
 }
 
 /** For tests. */

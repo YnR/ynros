@@ -323,6 +323,7 @@ export async function startBackground() {
   await loadShellEnv();
   await preferLocalClaudeCode().catch(() => {});
   rearmHolds().catch(() => {});
+  pollClaudeCodeUsage();
   startAutomations();
   importHistoryOnStart();
   briefing.startSchedule(loadSettings, providers);
@@ -363,6 +364,13 @@ export function startAutomations() {
       return conv.id;
     },
   });
+}
+
+/** Read Claude Code's 5-hour usage now and every 5 minutes. */
+function pollClaudeCodeUsage() {
+  const run = () => loadSettings().then((s) => quota.refreshClaudeCodeUsage(s)).catch(() => {});
+  run();
+  setInterval(run, 5 * 60_000).unref?.();
 }
 
 /** On startup, re-arm resume timers for chats waiting on a usage limit. */
